@@ -1,0 +1,674 @@
+// CohortCove data model.
+//
+// Every institution-owned record carries or derives an institution boundary
+// (directly via institutionId, or indirectly via a relation that itself
+// carries one). Server-side queries must always filter by the caller's
+// institution — never trust a client-supplied institutionId alone.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Institution / campus scoping
+// ---------------------------------------------------------------------------
+
+model Institution {
+  id        String   @id @default(cuid())
+  publicId  String   @unique @default(cuid())
+  name      String
+  slug      String   @unique
+  timeZone  String // IANA time zone used as the institution default
+  isDemo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allowedDomains AllowedDomain[]
+  campuses       Campus[]
+  memberships    InstitutionalMembership[]
+  organizations  Organization[]
+  venues         Venue[]
+  categories     Category[]
+  tags           Tag[]
+  eventSeries    EventSeries[]
+  moderationCases ModerationCase[]
+  auditEvents    AuditEvent[]
+
+  @@index([slug])
+}
+
+model AllowedDomain {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  domain        String // e.g. "students.midlandstate.demo"
+  role          MembershipRole @default(STUDENT) // domain can imply default role (e.g. staff domain)
+  createdAt     DateTime    @default(now())
+
+  @@unique([institutionId, domain])
+  @@index([institutionId])
+}
+
+model Campus {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name          String
+  slug          String
+  createdAt     DateTime    @default(now())
+
+  venues Venue[]
+
+  @@unique([institutionId, slug])
+  @@index([institutionId])
+}
+
+// ---------------------------------------------------------------------------
+// Users, membership, profile
+// ---------------------------------------------------------------------------
+
+enum MembershipRole {
+  STUDENT
+  STAFF_SPONSOR
+  CAMPUS_MODERATOR
+  INSTITUTION_ADMIN
+}
+
+enum MembershipStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  publicId     String   @unique @default(cuid())
+  email        String   @unique
+  passwordHash String? // null until password auth is set; verification is magic-link by default
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  memberships          InstitutionalMembership[]
+  profile              Profile?
+  organizationMemberships OrganizationMembership[]
+  rsvps                RSVP[]
+  waitlistEntries      WaitlistEntry[]
+  savedEvents          SavedEvent[]
+  follows              Follow[]
+  notifications        Notification[]
+  calendarTokens       CalendarToken[]
+  reportsFiled         Report[]                 @relation("ReportsFiled")
+  moderationActionsTaken ModerationAction[]      @relation("ModerationActionsTaken")
+  appeals              Appeal[]
+  uploads              Upload[]
+  auditEvents          AuditEvent[]
+  eventRevisions       EventRevision[]
+
+  @@index([email])
+}
+
+// A user's membership in one institution. A user could in theory belong to
+// more than one institution over time (e.g. transfer); each membership is
+// independently verified and scoped.
+model InstitutionalMembership {
+  id                    String            @id @default(cuid())
+  userId                String
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  institutionId         String
+  institution           Institution       @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  role                  MembershipRole    @default(STUDENT)
+  status                MembershipStatus  @default(PENDING_VERIFICATION)
+  verifiedEmail         String // the institutional email that was verified
+  verificationTokenHash String?
+  verificationSentAt    DateTime?
+  verifiedAt            DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@unique([userId, institutionId])
+  @@index([institutionId, status])
+}
+
+model Profile {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName        String
+  interests          String[] @default([])
+  visibility         ProfileVisibility @default(PRIVATE)
+  notifyEmail        Boolean  @default(true)
+  notifyInApp        Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+enum ProfileVisibility {
+  PRIVATE
+  ORGANIZATION_MEMBERS
+}
+
+// ---------------------------------------------------------------------------
+// Organizations
+// ---------------------------------------------------------------------------
+
+enum OrganizationVerificationState {
+  REQUESTED
+  UNDER_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  SUSPENDED
+  REJECTED
+}
+
+enum OrganizationMemberRole {
+  MEMBER
+  OFFICER
+}
+
+model Organization {
+  id            String      @id @default(cuid())
+  publicId      String      @unique @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name          String
+  slug          String
+  description   String
+  categoryId    String?
+  category      Category?   @relation(fields: [categoryId], references: [id])
+  contactChannel String
+  isOfficialDepartment Boolean @default(false) // distinguishes verified student org from official dept badge
+  verificationState OrganizationVerificationState @default(REQUESTED)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  memberships   OrganizationMembership[]
+  verifications OrganizationVerification[]
+  sponsorships  SponsorRelationship[]
+  eventSeries   EventSeries[]
+  follows       Follow[]
+  uploads       Upload[]
+
+  @@unique([institutionId, slug])
+  @@index([institutionId, verificationState])
+}
+
+model OrganizationMembership {
+  id             String                  @id @default(cuid())
+  organizationId String
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrganizationMemberRole  @default(MEMBER)
+  createdAt      DateTime                @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+}
+
+model OrganizationVerification {
+  id             String                          @id @default(cuid())
+  organizationId String
+  organization   Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  state          OrganizationVerificationState
+  evidenceNote   String
+  reasonCode     String? // standardized moderator reason code for rejection/changes-requested
+  reviewedBy     String? // moderator user id, informational only (not a relation to keep moderator access auditable separately)
+  createdAt      DateTime                        @default(now())
+
+  @@index([organizationId])
+}
+
+model SponsorRelationship {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sponsorName    String
+  sponsorEmail   String
+  confirmedAt    DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Venues, categories, tags
+// ---------------------------------------------------------------------------
+
+model Venue {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  campusId      String?
+  campus        Campus?     @relation(fields: [campusId], references: [id])
+  name          String
+  address       String?
+  isSensitive   Boolean     @default(false) // hide exact address per policy (e.g. survivor support meetings)
+  createdAt     DateTime    @default(now())
+
+  eventOccurrences EventOccurrence[]
+
+  @@index([institutionId])
+}
+
+model Category {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name          String
+  slug          String
+
+  organizations Organization[]
+  eventSeries   EventSeries[]
+
+  @@unique([institutionId, slug])
+  @@index([institutionId])
+}
+
+model Tag {
+  id            String      @id @default(cuid())
+  institutionId String
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name          String
+  slug          String
+
+  eventSeries EventSeriesTag[]
+
+  @@unique([institutionId, slug])
+  @@index([institutionId])
+}
+
+// ---------------------------------------------------------------------------
+// Events: series + occurrences + revisions
+// ---------------------------------------------------------------------------
+
+enum EventFormat {
+  IN_PERSON
+  ONLINE
+  HYBRID
+}
+
+enum EventApprovalStatus {
+  DRAFT
+  PENDING_APPROVAL
+  PUBLISHED
+  CHANGES_REQUESTED
+  CANCELED
+}
+
+model EventSeries {
+  id             String       @id @default(cuid())
+  publicId       String       @unique @default(cuid())
+  institutionId  String
+  institution    Institution  @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categoryId     String?
+  category       Category?    @relation(fields: [categoryId], references: [id])
+
+  title           String
+  summary         String
+  fullDescription String
+  format          EventFormat
+  timeZone        String // IANA tz the series is authored in
+  recurrenceRule  String? // RFC 5545 RRULE string; null = single occurrence
+  recurrenceHorizonEnd DateTime? // bound beyond which occurrences are not pre-generated
+
+  contactName    String
+  contactChannel String
+  cost           String? // free-text ("Free", "$5 suggested donation", ...); no payment processing in MVP
+  eligibility    String?
+  accessibilityInfo String?
+
+  approvalStatus EventApprovalStatus @default(DRAFT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  occurrences EventOccurrence[]
+  revisions   EventRevision[]
+  tags        EventSeriesTag[]
+
+  @@index([institutionId, approvalStatus])
+  @@index([organizationId])
+}
+
+model EventSeriesTag {
+  eventSeriesId String
+  eventSeries   EventSeries @relation(fields: [eventSeriesId], references: [id], onDelete: Cascade)
+  tagId         String
+  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([eventSeriesId, tagId])
+}
+
+// A single occurrence in UTC instants derived from the series' authored
+// IANA time zone. DST changes are handled by re-deriving UTC instants from
+// the wall-clock start/end + timeZone rather than storing a fixed offset.
+model EventOccurrence {
+  id            String      @id @default(cuid())
+  publicId      String      @unique @default(cuid())
+  eventSeriesId String
+  eventSeries   EventSeries @relation(fields: [eventSeriesId], references: [id], onDelete: Cascade)
+
+  startAtUtc DateTime
+  endAtUtc   DateTime
+  timeZone   String // IANA tz used to render this occurrence to viewers
+
+  venueId    String?
+  venue      Venue?  @relation(fields: [venueId], references: [id])
+  onlineUrl  String? // hidden from unauthenticated/unRSVP'd viewers per policy
+
+  capacity            Int? // null = unlimited
+  registrationDeadline DateTime?
+
+  isCanceled   Boolean  @default(false)
+  canceledAt   DateTime?
+  cancelReason String?
+
+  isException  Boolean  @default(false) // true if this occurrence was individually edited off the series pattern
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rsvps           RSVP[]
+  waitlistEntries WaitlistEntry[]
+  savedBy         SavedEvent[]
+
+  @@index([eventSeriesId, startAtUtc])
+  @@index([startAtUtc])
+}
+
+// Append-only revision history for material changes to a series (time,
+// location, access, cancellation). Used to power "change history" on the
+// event detail screen and to drive RSVP-holder notifications.
+model EventRevision {
+  id            String      @id @default(cuid())
+  eventSeriesId String
+  eventSeries   EventSeries @relation(fields: [eventSeriesId], references: [id], onDelete: Cascade)
+  editedByUserId String
+  editedBy      User        @relation(fields: [editedByUserId], references: [id])
+  summary       String // human-readable description of what changed
+  diff          Json // structured before/after for the changed fields
+  createdAt     DateTime    @default(now())
+
+  @@index([eventSeriesId])
+}
+
+// ---------------------------------------------------------------------------
+// RSVP, waitlist, saved events, follows
+// ---------------------------------------------------------------------------
+
+enum RsvpStatus {
+  GOING
+  CANCELED
+}
+
+model RSVP {
+  id            String           @id @default(cuid())
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  occurrenceId  String
+  occurrence    EventOccurrence  @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  status        RsvpStatus       @default(GOING)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  // One RSVP/waitlist state per person per occurrence: enforced at the
+  // database level, not just in application code.
+  @@unique([userId, occurrenceId])
+  @@index([occurrenceId, status])
+}
+
+enum WaitlistStatus {
+  WAITING
+  PROMOTED
+  EXPIRED
+  CANCELED
+}
+
+model WaitlistEntry {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  occurrenceId String
+  occurrence   EventOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  status       WaitlistStatus  @default(WAITING)
+  position     Int // deterministic FIFO order within the occurrence
+  promotedAt   DateTime?
+  promotionExpiresAt DateTime? // if promotion requires confirmation before expiry
+  createdAt    DateTime        @default(now())
+
+  @@unique([userId, occurrenceId])
+  @@index([occurrenceId, status, position])
+}
+
+model SavedEvent {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  occurrenceId String
+  occurrence   EventOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
+
+  @@unique([userId, occurrenceId])
+}
+
+model Follow {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications, calendar export
+// ---------------------------------------------------------------------------
+
+enum NotificationType {
+  VERIFICATION
+  ORG_APPROVAL
+  RSVP_CONFIRMATION
+  WAITLIST_PROMOTION
+  EVENT_REMINDER
+  EVENT_MATERIAL_CHANGE
+  EVENT_CANCELLATION
+  MODERATION_UPDATE
+}
+
+model Notification {
+  id        String            @id @default(cuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  payload   Json
+  readAt    DateTime?
+  // idempotency key so retried jobs never send/create the same notification twice
+  dedupeKey String            @unique
+  createdAt DateTime          @default(now())
+
+  @@index([userId, readAt])
+}
+
+model CalendarToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Trust & safety / moderation
+// ---------------------------------------------------------------------------
+
+enum ReportTargetType {
+  EVENT_SERIES
+  ORGANIZATION
+}
+
+enum ReportReasonCode {
+  SCAM
+  HARASSMENT
+  DISCRIMINATION
+  DANGEROUS_ACTIVITY
+  IMPERSONATION
+  SPAM
+  INACCURATE_DETAILS
+  ACCESSIBILITY_CONCERN
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+model Report {
+  id            String            @id @default(cuid())
+  institutionId String
+  reporterId    String
+  reporter      User              @relation("ReportsFiled", fields: [reporterId], references: [id])
+  targetType    ReportTargetType
+  targetId      String
+  reasonCode    ReportReasonCode
+  details       String
+  status        ReportStatus      @default(OPEN)
+  createdAt     DateTime          @default(now())
+
+  moderationCase ModerationCase?
+
+  @@index([institutionId, status])
+}
+
+enum ModerationCaseState {
+  OPEN
+  ACTION_TAKEN
+  CLOSED
+}
+
+model ModerationCase {
+  id            String               @id @default(cuid())
+  institutionId String
+  institution   Institution          @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  reportId      String?              @unique
+  report        Report?              @relation(fields: [reportId], references: [id])
+  targetType    ReportTargetType
+  targetId      String
+  state         ModerationCaseState  @default(OPEN)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  actions ModerationAction[]
+  appeals Appeal[]
+
+  @@index([institutionId, state])
+}
+
+enum ModerationActionType {
+  REQUEST_CHANGES
+  UNPUBLISH
+  RESTORE
+  SUSPEND_ORGANIZATION
+  SUSPEND_OFFICER
+  ESCALATE
+  DISMISS
+}
+
+model ModerationAction {
+  id               String                @id @default(cuid())
+  moderationCaseId String
+  moderationCase   ModerationCase        @relation(fields: [moderationCaseId], references: [id], onDelete: Cascade)
+  actionType       ModerationActionType
+  reasonCode       String
+  privateNote      String? // never shown to the reported user
+  takenByUserId    String
+  takenBy          User                  @relation("ModerationActionsTaken", fields: [takenByUserId], references: [id])
+  createdAt        DateTime              @default(now())
+
+  @@index([moderationCaseId])
+}
+
+enum AppealState {
+  SUBMITTED
+  UNDER_REVIEW
+  GRANTED
+  DENIED
+}
+
+model Appeal {
+  id               String         @id @default(cuid())
+  moderationCaseId String
+  moderationCase   ModerationCase @relation(fields: [moderationCaseId], references: [id], onDelete: Cascade)
+  submittedByUserId String
+  submittedBy      User           @relation(fields: [submittedByUserId], references: [id])
+  state            AppealState    @default(SUBMITTED)
+  statement        String
+  decisionNote     String?
+  createdAt        DateTime       @default(now())
+  resolvedAt       DateTime?
+
+  @@index([moderationCaseId])
+}
+
+// ---------------------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------------------
+
+enum UploadStatus {
+  PENDING_SCAN
+  CLEAN
+  REJECTED
+}
+
+model Upload {
+  id             String         @id @default(cuid())
+  ownerUserId    String
+  ownerUser      User           @relation(fields: [ownerUserId], references: [id])
+  organizationId String?
+  organization   Organization?  @relation(fields: [organizationId], references: [id])
+  storageKey     String         @unique // random, non-guessable object key
+  mimeType       String
+  byteSize       Int
+  width          Int?
+  height         Int?
+  status         UploadStatus   @default(PENDING_SCAN)
+  createdAt      DateTime       @default(now())
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id            String      @id @default(cuid())
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  actorUserId   String?
+  actor         User?       @relation(fields: [actorUserId], references: [id])
+  action        String // e.g. "organization.verification.approved"
+  targetType    String
+  targetId      String
+  metadata      Json?
+  createdAt     DateTime    @default(now())
+
+  @@index([institutionId, createdAt])
+  @@index([targetType, targetId])
+}

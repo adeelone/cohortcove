@@ -1,0 +1,44 @@
+version: "3.9"
+
+# Local development services for CohortCove. Not a production deployment
+# configuration — see README.md for production notes.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cohortcove
+      POSTGRES_PASSWORD: cohortcove
+      POSTGRES_DB: cohortcove
+    ports:
+      - "5432:5432"
+    volumes:
+      - cohortcove_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cohortcove"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # web UI
+      - "1025:1025" # SMTP
+    profiles:
+      - smtp-testing
+
+volumes:
+  cohortcove_pg_data:
