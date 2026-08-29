@@ -12,9 +12,14 @@ const config: Config = {
           bg: "#FAF6F0",
           surface: "#FFFFFF",
           ink: "#2B2620",
-          muted: "#7A7168",
+          // WCAG 2.2 AA requires >=4.5:1 for normal text; verified against
+          // both cove-bg and cove-surface (6.18:1 / 6.65:1).
+          muted: "#645B51",
           border: "#E7DFD3",
-          accent: "#D9622B", // warm ember accent for CTAs and date blocks
+          // Darkened from the original #D9622B (3.66:1 with white text,
+          // failing AA) to a ratio that passes as both a background (white
+          // text, 5.53:1) and as accent-colored text on bg/surface (5.14:1 / 5.53:1).
+          accent: "#AE4A1D",
           accentInk: "#FFFFFF",
         },
       },

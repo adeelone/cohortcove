@@ -40,6 +40,9 @@ async function requestOrgAction(formData: FormData) {
   if (result.kind === "slug_taken") {
     redirect("/organizations/new?error=name_taken");
   }
+  if (result.kind === "rate_limited") {
+    redirect("/organizations/new?error=rate_limited");
+  }
   redirect(`/organizations/${result.slug}?requested=1`);
 }
 
@@ -66,6 +69,11 @@ export default async function RequestOrganizationPage({
       {searchParams.error === "name_taken" && (
         <p role="alert" className="mt-3 rounded-md border border-cove-border bg-cove-surface p-2 text-sm text-cove-ink">
           An organization with a very similar name already exists. Try a more specific name.
+        </p>
+      )}
+      {searchParams.error === "rate_limited" && (
+        <p role="alert" className="mt-3 rounded-md border border-cove-border bg-cove-surface p-2 text-sm text-cove-ink">
+          You&apos;ve submitted several requests recently — please wait a bit before submitting another.
         </p>
       )}
 

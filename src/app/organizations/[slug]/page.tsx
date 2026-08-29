@@ -36,6 +36,7 @@ export default async function OrganizationProfilePage({
       category: true,
       memberships: { where: { userId: membership.userId } },
       follows: { where: { userId: membership.userId } },
+      logoUpload: true,
     },
   });
   if (!org) notFound();
@@ -72,7 +73,15 @@ export default async function OrganizationProfilePage({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
+      {org.logoUpload && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={`/api/uploads/${org.logoUpload.storageKey}`}
+          alt=""
+          className="h-16 w-16 rounded-md object-cover"
+        />
+      )}
+      <div className="mt-2 flex items-center gap-2">
         <h1 className="text-3xl font-semibold">{org.name}</h1>
         {org.isOfficialDepartment ? (
           <span className="rounded-full border border-cove-border px-2 py-0.5 text-xs text-cove-muted">
@@ -98,6 +107,10 @@ export default async function OrganizationProfilePage({
           {isFollowing ? "Following — click to unfollow" : "Follow"}
         </button>
       </form>
+
+      <Link href={`/organizations/${params.slug}/report`} className="mt-3 inline-block text-sm text-cove-muted underline">
+        Report this organization
+      </Link>
 
       <h2 className="mt-8 text-lg font-medium">Upcoming events</h2>
       <ul className="mt-3 flex flex-col gap-3">

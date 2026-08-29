@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 
-const SESSION_COOKIE = "cohortcove_session";
+export const SESSION_COOKIE = "cohortcove_session";
 
 function getSecretKey(): Uint8Array {
   const secret = process.env.AUTH_SECRET;

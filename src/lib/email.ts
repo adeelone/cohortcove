@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { prisma } from "@/lib/prisma";
 
 /**
- * Minimal email sandbox adapter. In local/demo development
- * (EMAIL_ADAPTER=console), messages are logged and written to
- * .local-emails/ instead of being sent, so verification and notification
- * flows are fully testable without a real mail provider. Do not treat this
- * adapter as production-ready; it exists specifically so CohortCove never
- * needs to fabricate "email sent" in a demo environment.
+ * Minimal email sandbox adapters — never a real production email provider,
+ * by design:
+ * - EMAIL_ADAPTER=console (local dev default): writes to .local-emails/.
+ * - EMAIL_ADAPTER=db: writes to the EmailOutbox table instead, viewable at
+ *   /dev/outbox. Used for the live/serverless demo deploy, where local
+ *   disk writes don't persist between invocations. Still not a real mail
+ *   provider — do not represent it as production email delivery.
  */
 
 export interface OutgoingEmail {
@@ -28,6 +30,15 @@ export async function sendEmail(message: OutgoingEmail): Promise<void> {
     await fs.writeFile(path.join(dir, fileName), body, "utf8");
     // eslint-disable-next-line no-console
     console.log(`[email:console-adapter] wrote ${fileName}`);
+    return;
+  }
+
+  if (adapter === "db") {
+    await prisma.emailOutbox.create({
+      data: { to: message.to, subject: message.subject, text: message.text },
+    });
+    // eslint-disable-next-line no-console
+    console.log(`[email:db-adapter] wrote outbox entry for ${message.to}`);
     return;
   }
 

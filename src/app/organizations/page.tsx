@@ -10,7 +10,7 @@ export default async function OrganizationsDirectoryPage() {
   const organizations = await prisma.organization.findMany({
     where: { institutionId: membership.institutionId, verificationState: "APPROVED" },
     orderBy: { name: "asc" },
-    include: { category: true, _count: { select: { follows: true } } },
+    include: { category: true },
   });
 
   return (

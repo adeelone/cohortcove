@@ -1,44 +1,30 @@
 # CohortCove roadmap
 
-Tracks what this scaffold actually built vs. what `BRIEF.md` requires, so future work doesn't have to re-derive it. Update this file as work lands — keep it honest, it's the input to `AUDIT.md`.
+Tracks what's actually built vs. what `BRIEF.md` requires, so future work doesn't have to re-derive it. Update this file as work lands — keep it honest, it's the input to `AUDIT.md`.
 
-## Done in this pass
+## Done (current pass)
 
-- [x] Prisma schema covering the full core data model from the brief (Institution → AuditEvent)
-- [x] Institution-scoped email verification (register → console-adapter email → verify → session cookie)
-- [x] Chronological event list (`/events`), scoped to the caller's institution and only published, non-canceled, future occurrences
-- [x] Event detail page with time zone/venue/capacity/accessibility fields
-- [x] Transactional RSVP with capacity check + deterministic FIFO waitlist (`src/server/rsvp.ts`), with a concurrency test proving no overbooking
-- [x] Idempotent, row-locked waitlist-promotion function
-- [x] Seed script: 1 demo institution, 6 organizations, 12 events, full/waitlisted/canceled states represented
-- [x] Docker Compose for local Postgres/Redis, `.env.example`, local email sandbox adapter
-- [x] Returning-user magic-link login, logout, and session-cookie flow
-- [x] Organization request, officer assignment, institution-scoped moderator review, audit records, and officer notices
-- [x] Organizer dashboard for event drafts, text/material edits, recurrence, cancellation, attendee views, and approval submission
-- [x] Event approval queue with institution-scoped moderator decisions and audit records
-- [x] Bounded recurrence generation that preserves occurrence exceptions, plus DST/parser unit coverage
-- [x] RSVP cancellation and capacity increases trigger row-locked waitlist promotion
-- [x] Follow/unfollow UI without exposing aggregate follower counts
-- [x] Idempotent notification records with the local email adapter for RSVP, waitlist, event-change, cancellation, and review notices
+- Institution-scoped email verification (register → console/db-adapter email → verify → session cookie) plus a returning-user login flow.
+- Personalized-but-explainable feed (`/feed`, follow/interest-based scoring with visible reasons) and the required chronological alternative (`/events`).
+- Search & filters (`/search`): keyword, category, campus, format, cost, accessibility, date range — all as shareable query-string URLs.
+- Event detail with time zone, venue/online-link-after-RSVP, accessibility, cost, capacity, organizer contact, tags, and change history.
+- Transactional RSVP with capacity check + deterministic FIFO waitlist (`src/server/rsvp.ts`), waitlist promotion wired to run inline on cancellation and on capacity increase, with concurrency + duplicate-promotion proofs.
+- Saved events, calendar-token-based ICS export (single event + personal feed), ICS validity tests.
+- Organization lifecycle: request → evidence/sponsor → moderator review (approve/changes-requested/reject/suspend/reinstate) → directory/profile with verified-vs-official-department badges that only an admin can set.
+- Organizer dashboard: draft → preview → submit → moderator approval → publish; capacity/time/location edits (marked as exceptions, trigger RSVP-holder notifications); single-occurrence or whole-series cancellation; attendee list scoped to name/email/RSVP status only; recurrence builder (bounded RFC 5545 subset: daily/weekly/monthly, INTERVAL/COUNT/UNTIL/BYDAY) with a DST-correctness proof.
+- Notifications: in-app center + preferences, delivery for verification, org/event approval, RSVP confirmation, waitlist promotion, reminders (cron-triggered), material changes, and cancellations — idempotent via dedupeKey, respecting preferences except for forced critical notices.
+- Trust & safety: report filing (brief's full reason-code list) on events/orgs, moderator queue, standardized action reason codes, reversible actions (unpublish/restore/suspend/escalate/dismiss), private-vs-visible notes, appeal submission + grant/deny (grant auto-restores), full audit trail. Rate limits on org requests, event submissions, RSVPs, and reports.
+- Uploads: validated (type/size/dimension) image uploads with random keys, safe serving headers, wired into organization logos and event images; malware-scan integration point stubbed and documented as such.
+- Profile & privacy: visibility/notification preferences, JSON data export, and account deletion (cancels RSVPs/waitlist, anonymizes) — both export and deletion gated behind a step-up (reauthentication) email link.
+- Accessibility: automated axe-core WCAG 2.2 AA scans wired into the e2e suite (caught and fixed real color-contrast violations); skip link, focus rings, reduced motion, semantic landmarks/`<time>`, non-color status indicators throughout.
+- Testing: unit (recurrence/DST, ICS, rate limiting, notification idempotency, upload validation), concurrency (overbooking + duplicate promotion), integration (institution isolation, approval-state transitions), Playwright e2e for the student/organizer/moderator journeys with axe scans — all running against a real hosted Postgres, not mocks.
+- Ops: `/api/health` + `/api/ready`, structured JSON logs with email redaction, a retention job (notifications/tokens), cron-triggered routes (reminders/recurrence/retention) guarded by a shared secret, GitHub Actions CI (typecheck/lint/unit tests/build + a separate e2e job, both against a real Postgres service container), a production Dockerfile (Next.js standalone output), and an admin-bootstrap script.
+- Live deployment: a real hosted Supabase Postgres project, migrated and seeded — see `AUDIT.md` for the full deploy status.
 
-## Not built yet (ordered roughly by suggested priority)
+## Explicitly deferred / documented limitations (not bugs)
 
-1. **Auth hardening**: session refresh/revocation, login throttling, and automated cross-institution authorization tests.
-2. **Scheduled workers**: wire recurrence-horizon extension, reminders, email delivery retries, and queue diagnostics to BullMQ or a deployment scheduler.
-3. **Search & filters**: no search index, filter UI (date/category/campus/format/cost/accessibility), or shareable filter URLs.
-4. **Personalized feed**: only the chronological view exists; the brief also wants an explainable personalized feed with a chronological alternative.
-5. **Saved events and calendar export**: follow/unfollow exists, but saved-event UI, follower-only update notices, ICS generation, and calendar-token UI do not.
-6. **User-report moderation**: organization/event approval queues exist, but report filing, moderation cases/actions, and appeals are not implemented.
-7. **Uploads**: `Upload` exists in the schema; no endpoint, validation, storage adapter, or malware-scan integration point exists.
-8. **Profile & privacy settings**: visibility/notification preferences exist in the schema but are not user-editable.
-9. **Security and integration tests**: add IDOR, role, institution-isolation, notification-idempotency, promotion-concurrency, migration, and backup/restore coverage.
-10. **Accessibility pass**: base focus styles and reduced-motion CSS exist; the screens still need a WCAG 2.2 AA audit and screen-reader testing.
-11. **Playwright e2e suite**: not started. `@playwright/test` is installed, but no config or journey tests exist.
-12. **CI and production delivery**: no GitHub Actions, health/readiness endpoints, structured logging, deployment target, or production email/storage configuration.
-
-## Explicitly deferred per the brief (not bugs)
-
-- Campus SSO/SAML/OIDC (MVP is institutional email verification only)
-- Real SMTP/production email — `EMAIL_ADAPTER=smtp` intentionally throws until wired to a real transport
-- Real object storage — uploads default to local/no-op until `STORAGE_ADAPTER=s3` is implemented
-- Legal/privacy review, real institution deployment
+- **Jobs on serverless**: BullMQ/Redis remain available for local multi-process dev, but the deployed app runs event-driven jobs inline and time-driven jobs via Vercel Cron rather than long-running workers — a deliberate adaptation to a serverless target, documented in `README.md`.
+- **Email**: no real transactional email provider is wired up (`EMAIL_ADAPTER=smtp` still throws by design). The live deploy uses `EMAIL_ADAPTER=db` (an outbox table viewable at `/dev/outbox`) as a demo-only substitute — explicitly not private, never to be used with real personal data.
+- **Malware scanning**: `scanUpload()` is a documented integration point, not a real scanner.
+- **Sessions list**: there is no persisted list of active sessions/devices to review or revoke individually (JWT-based, stateless) — noted on the profile page and in `AUDIT.md`.
+- Campus SSO/SAML/OIDC, institutional legal/privacy review, and real university deployment remain explicitly out of scope per the brief.

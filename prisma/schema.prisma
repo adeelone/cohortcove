@@ -10,8 +10,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,8 @@ model Organization {
   contactChannel String
   isOfficialDepartment Boolean @default(false) // distinguishes verified student org from official dept badge
   verificationState OrganizationVerificationState @default(REQUESTED)
+  logoUploadId  String?     @unique
+  logoUpload    Upload?     @relation("OrganizationLogo", fields: [logoUploadId], references: [id])
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -324,6 +327,8 @@ model EventSeries {
   cost           String? // free-text ("Free", "$5 suggested donation", ...); no payment processing in MVP
   eligibility    String?
   accessibilityInfo String?
+  imageUploadId  String?     @unique
+  imageUpload    Upload?     @relation("EventImage", fields: [imageUploadId], references: [id])
 
   approvalStatus EventApprovalStatus @default(DRAFT)
 
@@ -650,7 +655,28 @@ model Upload {
   status         UploadStatus   @default(PENDING_SCAN)
   createdAt      DateTime       @default(now())
 
+  organizationLogoFor Organization? @relation("OrganizationLogo")
+  eventImageFor       EventSeries?  @relation("EventImage")
+
   @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Email outbox (EMAIL_ADAPTER=db)
+// ---------------------------------------------------------------------------
+
+// Demo-only substitute for a real transactional email provider, used when
+// EMAIL_ADAPTER=db (e.g. on serverless deploys where local disk writes
+// don't persist). Viewable at /dev/outbox. Never represent this as
+// production email delivery — see AUDIT.md.
+model EmailOutbox {
+  id        String   @id @default(cuid())
+  to        String
+  subject   String
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([to, createdAt])
 }
 
 // ---------------------------------------------------------------------------

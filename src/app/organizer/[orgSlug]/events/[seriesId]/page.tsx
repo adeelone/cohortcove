@@ -9,6 +9,7 @@ import {
   editOccurrenceMaterial,
   updateEventSeriesText,
 } from "@/server/events";
+import { uploadEventImageAction } from "@/lib/actions/upload-actions";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
@@ -127,8 +128,10 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default async function OrganizerEventDetailPage({
   params,
+  searchParams,
 }: {
   params: { orgSlug: string; seriesId: string };
+  searchParams: { uploadError?: string };
 }) {
   const { org } = await requireOfficerContext(params.orgSlug);
 
@@ -137,6 +140,7 @@ export default async function OrganizerEventDetailPage({
     include: {
       occurrences: { orderBy: { startAtUtc: "asc" }, include: { venue: true, _count: { select: { rsvps: { where: { status: "GOING" } } } } } },
       revisions: { orderBy: { createdAt: "desc" }, take: 10, include: { editedBy: { select: { email: true } } } },
+      imageUpload: true,
     },
   });
   if (!series || series.organizationId !== org.id) notFound();
@@ -150,6 +154,7 @@ export default async function OrganizerEventDetailPage({
   const boundCancelOccurrence = cancelOccurrenceAction.bind(null, params.orgSlug, params.seriesId);
   const boundEditOccurrence = editOccurrenceAction.bind(null, params.orgSlug, params.seriesId);
   const boundEditText = editTextAction.bind(null, params.orgSlug, params.seriesId);
+  const boundUploadImage = uploadEventImageAction.bind(null, params.orgSlug, params.seriesId);
 
   return (
     <main id="main-content" className="mx-auto max-w-2xl px-6 py-10">
@@ -161,6 +166,32 @@ export default async function OrganizerEventDetailPage({
         </span>
       </div>
       <p className="mt-2 text-cove-muted">{series.summary}</p>
+
+      {searchParams.uploadError && (
+        <p role="alert" className="mt-3 rounded-md border border-cove-border bg-cove-surface p-2 text-sm">
+          Upload failed: {decodeURIComponent(searchParams.uploadError)}
+        </p>
+      )}
+
+      <section className="mt-4 flex items-center gap-4">
+        {series.imageUpload && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`/api/uploads/${series.imageUpload.storageKey}`}
+            alt=""
+            className="h-20 w-32 rounded-md object-cover"
+          />
+        )}
+        <form action={boundUploadImage} className="flex items-center gap-2">
+          <label htmlFor="image" className="text-sm font-medium">
+            {series.imageUpload ? "Replace image" : "Upload event image"}
+          </label>
+          <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/webp" required className="text-sm" />
+          <button type="submit" className="rounded-md border border-cove-border px-3 py-1.5 text-sm hover:bg-cove-bg">
+            Upload
+          </button>
+        </form>
+      </section>
 
       <div className="mt-4 flex flex-wrap gap-3">
         {canSubmit && (

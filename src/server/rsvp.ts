@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { createNotification } from "@/server/notifications";
+import { recordAudit } from "@/server/audit";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export type RsvpResult =
   | { kind: "confirmed"; rsvpId: string }
@@ -7,7 +9,8 @@ export type RsvpResult =
   | { kind: "already_going" }
   | { kind: "already_waitlisted" }
   | { kind: "occurrence_canceled" }
-  | { kind: "registration_closed" };
+  | { kind: "registration_closed" }
+  | { kind: "rate_limited" };
 
 /**
  * Create an RSVP (or waitlist entry) for a user on an occurrence.
@@ -26,6 +29,9 @@ export type RsvpResult =
  * parallel requests against a real Postgres instance.
  */
 export async function createRsvp(userId: string, occurrenceId: string): Promise<RsvpResult> {
+  const allowed = await checkRateLimit({ actorUserId: userId, ...RATE_LIMITS.RSVP_CREATE });
+  if (!allowed) return { kind: "rate_limited" };
+
   const result = await prisma.$transaction(async (tx): Promise<RsvpResult> => {
     const occurrenceRows = await tx.$queryRaw<
       { id: string; capacity: number | null; isCanceled: boolean; registrationDeadline: Date | null }[]
@@ -94,7 +100,16 @@ export async function createRsvp(userId: string, occurrenceId: string): Promise<
         });
 
     return { kind: "waitlisted", waitlistEntryId: entry.id, position: nextPosition };
-  }, { isolationLevel: "ReadCommitted" });
+  }, { isolationLevel: "ReadCommitted", maxWait: 30000, timeout: 60000 });
+
+  if (result.kind === "confirmed" || result.kind === "waitlisted") {
+    await recordAudit(prisma, {
+      actorUserId: userId,
+      action: RATE_LIMITS.RSVP_CREATE.action,
+      targetType: "EventOccurrence",
+      targetId: occurrenceId,
+    });
+  }
 
   if (result.kind === "confirmed") {
     await createNotification({
@@ -126,7 +141,7 @@ export async function cancelRsvp(userId: string, occurrenceId: string): Promise<
       data: { status: "CANCELED" },
     });
     return updated.count > 0;
-  });
+  }, { maxWait: 30000, timeout: 60000 });
 
   if (wasGoing) {
     await promoteNextWaitlistEntry(occurrenceId);
@@ -175,7 +190,7 @@ export async function promoteNextWaitlistEntry(occurrenceId: string): Promise<st
     });
 
     return next;
-  });
+  }, { maxWait: 30000, timeout: 60000 });
 
   if (!promotedEntry) return null;
 

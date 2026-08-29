@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentMembership, isOrganizationOfficer } from "@/lib/auth";
 import { formatInEventTimeZone } from "@/lib/time";
+import { uploadOrgLogoAction } from "@/lib/actions/upload-actions";
 import { redirect, notFound } from "next/navigation";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -12,15 +13,24 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELED: "Canceled",
 };
 
-export default async function OrganizerDashboardPage({ params }: { params: { orgSlug: string } }) {
+export default async function OrganizerDashboardPage({
+  params,
+  searchParams,
+}: {
+  params: { orgSlug: string };
+  searchParams: { uploadError?: string };
+}) {
   const membership = await getCurrentMembership();
   if (!membership) redirect("/onboarding/login");
 
   const org = await prisma.organization.findUnique({
     where: { institutionId_slug: { institutionId: membership.institutionId, slug: params.orgSlug } },
+    include: { logoUpload: true },
   });
   if (!org) notFound();
   if (!(await isOrganizationOfficer(membership.userId, org.id))) notFound();
+
+  const boundUploadLogo = uploadOrgLogoAction.bind(null, params.orgSlug);
 
   const series = await prisma.eventSeries.findMany({
     where: { organizationId: org.id },
@@ -59,6 +69,32 @@ export default async function OrganizerDashboardPage({ params }: { params: { org
           New event
         </Link>
       </div>
+
+      {searchParams.uploadError && (
+        <p role="alert" className="mt-4 rounded-md border border-cove-border bg-cove-surface p-3 text-sm">
+          Upload failed: {decodeURIComponent(searchParams.uploadError)}
+        </p>
+      )}
+
+      <section className="mt-4 flex items-center gap-4 rounded-lg border border-cove-border bg-cove-surface p-4">
+        {org.logoUpload && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`/api/uploads/${org.logoUpload.storageKey}`}
+            alt={`${org.name} logo`}
+            className="h-16 w-16 rounded-md object-cover"
+          />
+        )}
+        <form action={boundUploadLogo} className="flex items-center gap-2">
+          <label htmlFor="logo" className="text-sm font-medium">
+            {org.logoUpload ? "Replace logo" : "Upload logo"}
+          </label>
+          <input id="logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp" required className="text-sm" />
+          <button type="submit" className="rounded-md border border-cove-border px-3 py-1.5 text-sm hover:bg-cove-bg">
+            Upload
+          </button>
+        </form>
+      </section>
 
       {org.verificationState !== "APPROVED" && (
         <p role="alert" className="mt-4 rounded-md border border-cove-border bg-cove-surface p-3 text-sm">

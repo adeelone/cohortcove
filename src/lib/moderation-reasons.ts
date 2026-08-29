@@ -8,6 +8,18 @@ export const ORG_VERIFICATION_REASON_CODES = [
   { code: "OTHER", label: "Other (see note)" },
 ] as const;
 
+export const REPORT_REASON_CODES = [
+  { code: "SCAM", label: "Scam" },
+  { code: "HARASSMENT", label: "Harassment" },
+  { code: "DISCRIMINATION", label: "Discrimination" },
+  { code: "DANGEROUS_ACTIVITY", label: "Dangerous activity" },
+  { code: "IMPERSONATION", label: "Impersonation" },
+  { code: "SPAM", label: "Spam" },
+  { code: "INACCURATE_DETAILS", label: "Inaccurate details" },
+  { code: "ACCESSIBILITY_CONCERN", label: "Accessibility concern" },
+  { code: "OTHER", label: "Other" },
+] as const;
+
 export const MODERATION_ACTION_REASON_CODES = [
   { code: "POLICY_VIOLATION", label: "Violates community conduct policy" },
   { code: "MISLEADING_INFORMATION", label: "Misleading or inaccurate details" },

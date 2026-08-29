@@ -29,5 +29,5 @@ export async function GET(request: NextRequest) {
   });
   await setSessionCookie(sessionToken);
 
-  return NextResponse.redirect(new URL("/events", request.url));
+  return NextResponse.redirect(new URL("/feed", request.url));
 }

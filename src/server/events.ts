@@ -4,6 +4,7 @@ import { createNotification } from "@/server/notifications";
 import { promoteNextWaitlistEntry } from "@/server/rsvp";
 import { regenerateOccurrencesForSeries } from "@/jobs/recurrence";
 import { localWallTimeToUtc } from "@/lib/time";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import type { EventFormat } from "@prisma/client";
 
 export interface DraftEventInput {
@@ -109,9 +110,12 @@ export async function updateEventSeriesText(input: TextEditInput): Promise<void>
   await prisma.eventSeries.update({ where: { id: seriesId }, data });
 }
 
-export type SubmitResult = { kind: "submitted" } | { kind: "invalid_state" };
+export type SubmitResult = { kind: "submitted" } | { kind: "invalid_state" } | { kind: "rate_limited" };
 
 export async function submitForApproval(seriesId: string, actorUserId: string): Promise<SubmitResult> {
+  const allowed = await checkRateLimit({ actorUserId, ...RATE_LIMITS.EVENT_SUBMIT });
+  if (!allowed) return { kind: "rate_limited" };
+
   const series = await prisma.eventSeries.findUniqueOrThrow({ where: { id: seriesId } });
   if (series.approvalStatus !== "DRAFT" && series.approvalStatus !== "CHANGES_REQUESTED") {
     return { kind: "invalid_state" };

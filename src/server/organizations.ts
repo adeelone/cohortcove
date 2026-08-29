@@ -2,11 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/slug";
 import { recordAudit } from "@/server/audit";
 import { createNotification } from "@/server/notifications";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import type { OrganizationVerificationState } from "@prisma/client";
 
 export type RequestOrgResult =
   | { kind: "requested"; organizationId: string; slug: string }
-  | { kind: "slug_taken" };
+  | { kind: "slug_taken" }
+  | { kind: "rate_limited" };
 
 /**
  * A verified student requests a new organization. The requester becomes its
@@ -28,6 +30,9 @@ export async function requestOrganization(params: {
   sponsorName?: string;
   sponsorEmail?: string;
 }): Promise<RequestOrgResult> {
+  const allowed = await checkRateLimit({ actorUserId: params.requesterUserId, ...RATE_LIMITS.ORG_REQUEST });
+  if (!allowed) return { kind: "rate_limited" };
+
   const baseSlug = slugify(params.name);
   if (!baseSlug) return { kind: "slug_taken" };
 

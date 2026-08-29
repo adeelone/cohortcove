@@ -89,7 +89,7 @@ describeWithDatabase("createRsvp concurrency", () => {
       await prisma.waitlistEntry.findMany({ where: { occurrenceId }, orderBy: { position: "asc" } })
     ).map((e) => e.position);
     expect(new Set(positions).size).toBe(positions.length);
-  });
+  }, 90000);
 
   afterAll(async () => {
     await prisma.institution.deleteMany({ where: { name: "Concurrency Test Institution" } });

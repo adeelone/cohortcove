@@ -29,11 +29,14 @@ export async function Nav() {
         aria-label="Main"
         className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3 text-sm"
       >
-        <Link href="/events" className="font-semibold text-cove-ink">
+        <Link href="/feed" className="font-semibold text-cove-ink">
           CohortCove
         </Link>
+        <Link href="/feed" className="text-cove-ink hover:underline">
+          For you
+        </Link>
         <Link href="/events" className="text-cove-ink hover:underline">
-          Events
+          Chronological
         </Link>
         <Link href="/search" className="text-cove-ink hover:underline">
           Search
