@@ -37,7 +37,7 @@ export async function storeUploadedFile(key: string, data: Buffer, contentType: 
         "Content-Type": contentType,
         "x-upsert": "false",
       },
-      body: data,
+      body: new Uint8Array(data),
     });
     if (!response.ok) {
       throw new Error(`Supabase Storage upload failed: ${response.status} ${await response.text()}`);

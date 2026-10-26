@@ -1,117 +1,64 @@
 import { test, expect } from "@playwright/test";
-import { loginAs, prisma } from "./fixtures";
+import { STUDENT_DOMAIN, expectAccessible, loginAs, prisma } from "./fixtures";
 
-/**
- * Moderator/report/appeal journey: a student reports a seeded event, a
- * moderator opens the case and unpublishes it, the organizer appeals, and
- * the moderator grants the appeal — restoring the event. Exercises the
- * brief's "preserve an appeal/audit trail" requirement end to end.
- */
-test("report an event, moderator unpublishes it, officer appeals, moderator restores it", async ({ browser }) => {
+/** Brief journey 7: report → moderator unpublishes → officer appeals → moderator grants → restored. */
+test("report, unpublish, appeal, restore", async ({ browser }) => {
   const stamp = Date.now();
-  const reporterEmail = `e2e-reporter-${stamp}@students.midlandstate.demo`;
-  const moderatorEmail = `e2e-mod2-${stamp}@staff.midlandstate.demo`;
-  const officerEmail = `e2e-mod-officer-${stamp}@students.midlandstate.demo`;
+  const studentCtx = await browser.newContext();
+  const student = await studentCtx.newPage();
+  await loginAs(studentCtx, { email: `e2e-reporter-${stamp}@${STUDENT_DOMAIN}` });
 
-  const reporterContext = await browser.newContext();
-  const moderatorContext = await browser.newContext();
-  const officerContext = await browser.newContext();
-  const reporterPage = await reporterContext.newPage();
-  const moderatorPage = await moderatorContext.newPage();
-  const officerPage = await officerContext.newPage();
+  await student.goto("/search?q=Composting");
+  await student.getByRole("link", { name: "Composting 101" }).click();
+  await student.waitForURL(/\/events\/[^/]+$/);
+  const eventUrl = student.url();
+  await student.getByRole("link", { name: /report this event/i }).click();
+  await expectAccessible(student);
+  await student.getByLabel("Reason").selectOption("SPAM");
+  await student.getByLabel(/what's wrong/i).fill("This is a duplicate posting advertising a paid course.");
+  await student.getByRole("button", { name: /send report/i }).click();
+  await expect(student.getByText(/sent to campus moderators/i)).toBeVisible();
 
-  const { institutionId } = await loginAs(reporterContext, { email: reporterEmail });
-  await loginAs(moderatorContext, { email: moderatorEmail, role: "CAMPUS_MODERATOR" });
-  const { userId: officerUserId } = await loginAs(officerContext, { email: officerEmail });
+  const modCtx = await browser.newContext();
+  const mod = await modCtx.newPage();
+  await loginAs(modCtx, { email: "moderator@staff.midlandstate.demo", role: "CAMPUS_MODERATOR" });
+  await mod.goto("/moderation");
+  await mod.getByRole("link", { name: /spam · event/i }).first().click();
+  await expectAccessible(mod);
+  await expect(mod.getByText(/duplicate posting advertising/i)).toBeVisible();
+  await mod.getByLabel(/unpublish \/ suspend/i).check();
+  await mod.getByLabel(/private note/i).fill("Checking with the garden collective.");
+  await mod.getByRole("button", { name: /record decision/i }).click();
+  await expect(mod.getByText(/recorded\./i)).toBeVisible();
+  const caseUrl = mod.url().split("?")[0]!;
 
-  // Set up a fresh org + officer + published event so this test doesn't
-  // depend on exact seed-data contents.
-  const org = await prisma.organization.create({
-    data: {
-      institutionId,
-      name: `E2E Moderation Org ${stamp}`,
-      slug: `e2e-moderation-org-${stamp}`,
-      description: "d",
-      contactChannel: "c@x.demo",
-      verificationState: "APPROVED",
-    },
-  });
-  await prisma.organizationMembership.create({ data: { organizationId: org.id, userId: officerUserId, role: "OFFICER" } });
-  const series = await prisma.eventSeries.create({
-    data: {
-      institutionId,
-      organizationId: org.id,
-      title: `E2E Reportable Event ${stamp}`,
-      summary: "s",
-      fullDescription: "d",
-      format: "IN_PERSON",
-      timeZone: "UTC",
-      contactName: "c",
-      contactChannel: "c@x.demo",
-      approvalStatus: "PUBLISHED",
-    },
-  });
-  const occurrence = await prisma.eventOccurrence.create({
-    data: {
-      eventSeriesId: series.id,
-      startAtUtc: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      endAtUtc: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000 + 3600000),
-      timeZone: "UTC",
-    },
-  });
+  // Hidden from students now.
+  await student.goto(eventUrl);
+  await expect(student.getByRole("heading", { name: /couldn't find that page/i })).toBeVisible();
 
-  // 1. Reporter files a report.
-  await reporterPage.goto(`/events/${occurrence.publicId}/report`);
-  await reporterPage.getByLabel(/reason/i).selectOption("INACCURATE_DETAILS");
-  await reporterPage.getByLabel(/details/i).fill("Automated e2e test report.");
-  await reporterPage.getByRole("button", { name: /submit report/i }).click();
-  await expect(reporterPage).toHaveURL(new RegExp(`/events/${occurrence.publicId}\\?reported=1`));
+  // The organization's officer appeals — and never sees the reporter or private note.
+  const officerCtx = await browser.newContext();
+  const officer = await officerCtx.newPage();
+  await loginAs(officerCtx, { email: "officer2@students.midlandstate.demo" });
+  await officer.goto(caseUrl);
+  await expect(officer.getByText(/checking with the garden collective/i)).toHaveCount(0);
+  await expect(officer.getByText(`e2e-reporter-${stamp}`)).toHaveCount(0);
+  await officer.getByLabel(/appeal this decision/i).fill("This is our real workshop, not a paid course.");
+  await officer.getByRole("button", { name: /submit appeal/i }).click();
+  await expect(officer.getByText(/appeal submitted/i)).toBeVisible();
 
-  const modCase = await prisma.moderationCase.findFirstOrThrow({ where: { targetId: series.id } });
-  expect(modCase.state).toBe("OPEN");
+  await mod.goto(caseUrl);
+  await mod.getByLabel(/decision note/i).fill("Confirmed with the sponsor — restoring.");
+  await mod.getByRole("button", { name: /grant & restore/i }).click();
+  await expect(mod.getByText(/recorded\./i)).toBeVisible();
 
-  // 2. Moderator unpublishes.
-  await moderatorPage.goto(`/moderation/cases/${modCase.id}`);
-  await moderatorPage.getByLabel(/^action$/i).selectOption("UNPUBLISH");
-  await moderatorPage.getByLabel(/reason code/i).selectOption({ index: 0 });
-  await moderatorPage.getByRole("button", { name: /submit action/i }).click();
-  // The case-detail action form has no redirect (it revalidates in place),
-  // so — unlike a redirecting server action — Playwright's click() gives no
-  // signal that the mutation finished. Wait for the status text the page
-  // renders after ACTION_TAKEN before reading the DB directly, or the read
-  // races the server action.
-  await expect(moderatorPage.getByText(/action taken/i)).toBeVisible();
+  await student.goto(eventUrl);
+  await expect(student.getByRole("heading", { name: "Composting 101" })).toBeVisible();
 
-  let updatedSeries = await prisma.eventSeries.findUniqueOrThrow({ where: { id: series.id } });
-  expect(updatedSeries.approvalStatus).toBe("CHANGES_REQUESTED");
-  let updatedCase = await prisma.moderationCase.findUniqueOrThrow({ where: { id: modCase.id } });
-  expect(updatedCase.state).toBe("ACTION_TAKEN");
+  const audit = await prisma.auditEvent.findMany({ where: { action: { in: ["moderation.action.unpublish", "appeal.granted"] }, createdAt: { gte: new Date(stamp) } } });
+  expect(audit.map((a) => a.action).sort()).toEqual(["appeal.granted", "moderation.action.unpublish"]);
 
-  // 3. Officer (the affected party) appeals.
-  await officerPage.goto(`/moderation/cases/${modCase.id}`);
-  await officerPage.getByRole("textbox").last().fill("This was a mistake — please review again.");
-  await officerPage.getByRole("button", { name: /submit appeal/i }).click();
-  await expect(officerPage.getByText(/^SUBMITTED$/)).toBeVisible();
-
-  const appeal = await prisma.appeal.findFirstOrThrow({ where: { moderationCaseId: modCase.id } });
-  expect(appeal.state).toBe("SUBMITTED");
-
-  // 4. Moderator grants the appeal, restoring the event.
-  await moderatorPage.goto(`/moderation/cases/${modCase.id}`);
-  await moderatorPage.getByPlaceholder(/decision note/i).fill("Reviewed again — restoring.");
-  await moderatorPage.getByRole("button", { name: /^grant$/i }).click();
-  await expect(moderatorPage.getByText(/^GRANTED$/)).toBeVisible();
-
-  updatedSeries = await prisma.eventSeries.findUniqueOrThrow({ where: { id: series.id } });
-  expect(updatedSeries.approvalStatus).toBe("PUBLISHED");
-
-  const resolvedAppeal = await prisma.appeal.findUniqueOrThrow({ where: { id: appeal.id } });
-  expect(resolvedAppeal.state).toBe("GRANTED");
-
-  const auditTrail = await prisma.auditEvent.findMany({ where: { targetId: series.id }, orderBy: { createdAt: "asc" } });
-  expect(auditTrail.map((a) => a.action)).toEqual(
-    expect.arrayContaining(["report.filed", "moderation.action.unpublish", "appeal.submitted", "appeal.granted"]),
-  );
+  await Promise.all([studentCtx.close(), modCtx.close(), officerCtx.close()]);
 });
 
 test.afterAll(async () => {

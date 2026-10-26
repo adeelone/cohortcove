@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { storeUploadedFile } from "@/lib/storage";
-import { getImageDimensions } from "@/lib/image-dimensions";
+import { getImageDimensions, sniffImageType } from "@/lib/image-dimensions";
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB
@@ -35,15 +35,21 @@ export async function validateAndStoreUpload(params: {
   if (params.data.length > MAX_BYTES) {
     return { kind: "rejected", reason: `File too large — max ${MAX_BYTES / (1024 * 1024)}MB.` };
   }
+  // The declared type must match the bytes — a renamed HTML/SVG/script file
+  // claiming to be an image is rejected here.
+  if (sniffImageType(params.data) !== params.mimeType) {
+    return { kind: "rejected", reason: "That file isn't a valid PNG, JPEG, or WebP image." };
+  }
 
   const dimensions = getImageDimensions(params.data, params.mimeType);
-  if (dimensions) {
-    if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
-      return { kind: "rejected", reason: `Image too large — max ${MAX_DIMENSION}px on any side.` };
-    }
-    if (dimensions.width < MIN_DIMENSION || dimensions.height < MIN_DIMENSION) {
-      return { kind: "rejected", reason: `Image too small — min ${MIN_DIMENSION}px on any side.` };
-    }
+  if (!dimensions) {
+    return { kind: "rejected", reason: "Couldn't read the image's dimensions — try re-exporting it." };
+  }
+  if (dimensions.width > MAX_DIMENSION || dimensions.height > MAX_DIMENSION) {
+    return { kind: "rejected", reason: `Image too large — max ${MAX_DIMENSION}px on any side.` };
+  }
+  if (dimensions.width < MIN_DIMENSION || dimensions.height < MIN_DIMENSION) {
+    return { kind: "rejected", reason: `Image too small — min ${MIN_DIMENSION}px on any side.` };
   }
 
   const extension = params.mimeType === "image/png" ? "png" : params.mimeType === "image/webp" ? "webp" : "jpg";
@@ -58,8 +64,8 @@ export async function validateAndStoreUpload(params: {
       storageKey,
       mimeType: params.mimeType,
       byteSize: params.data.length,
-      width: dimensions?.width,
-      height: dimensions?.height,
+      width: dimensions.width,
+      height: dimensions.height,
       status: "PENDING_SCAN",
     },
   });

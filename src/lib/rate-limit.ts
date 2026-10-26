@@ -24,5 +24,19 @@ export const RATE_LIMITS = {
   REPORT_FILED: { action: "report.filed", windowMs: 60 * 60 * 1000, max: 10 },
   EVENT_SUBMIT: { action: "event.series.submitted", windowMs: 60 * 60 * 1000, max: 10 },
   RSVP_CREATE: { action: "rsvp.created", windowMs: 60 * 60 * 1000, max: 40 },
-  INVITATION_SEND: { action: "invitation.sent", windowMs: 60 * 60 * 1000, max: 20 },
+  INVITATION_SEND: { action: "organization.officer.added", windowMs: 60 * 60 * 1000, max: 20 },
 } as const;
+
+/**
+ * Key-based limiter for unauthenticated actions (sign-in links, campus
+ * sign-ups) where there is no actor to count audit rows for. Records the
+ * hit and returns whether it was within the limit, so callers make one
+ * call per attempt.
+ */
+export async function consumeRateLimit(key: string, max: number, windowMs: number): Promise<boolean> {
+  const since = new Date(Date.now() - windowMs);
+  const count = await prisma.rateLimitHit.count({ where: { key, createdAt: { gte: since } } });
+  if (count >= max) return false;
+  await prisma.rateLimitHit.create({ data: { key } });
+  return true;
+}

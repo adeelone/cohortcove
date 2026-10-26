@@ -1,75 +1,71 @@
 import { test, expect } from "@playwright/test";
-import fs from "node:fs/promises";
-import path from "node:path";
-import AxeBuilder from "@axe-core/playwright";
-import { prisma } from "./fixtures";
+import { STUDENT_DOMAIN, expectAccessible, prisma, readLatestLink } from "./fixtures";
 
 /**
- * Full student journey, exercising the real email-verification UI (not the
- * cookie-injection shortcut used by the other e2e specs): register with an
- * allowed institutional email -> read the verification link from the
- * console email adapter's .local-emails/ output -> verify -> browse ->
- * RSVP -> cancel. Also runs an axe accessibility scan on the key screens
- * along the way (WCAG 2.2 AA target).
+ * Brief journeys 1–3 through the real UI: join with a campus email (magic
+ * link), onboard (terms + interests), discover via feed/calendar/search,
+ * RSVP, add to calendar, cancel — with accessibility scans along the way.
  */
-async function readLatestVerifyLink(email: string): Promise<string> {
-  const dir = path.join(process.cwd(), ".local-emails");
-  const safeEmail = email.replace(/[^a-z0-9]/gi, "_");
-  const files = (await fs.readdir(dir)).filter((f) => f.includes(safeEmail)).sort();
-  const latest = files[files.length - 1];
-  if (!latest) throw new Error(`No email found for ${email} in ${dir}`);
-  const content = await fs.readFile(path.join(dir, latest), "utf8");
-  const match = content.match(/https?:\/\/\S+/);
-  if (!match) throw new Error(`No URL found in email for ${email}`);
-  return match[0];
-}
+test("join, onboard, discover, RSVP and cancel", async ({ page }) => {
+  const email = `e2e-student-${Date.now()}@${STUDENT_DOMAIN}`;
 
-test("register, verify, browse, RSVP, and cancel", async ({ page }) => {
-  const email = `e2e-student-${Date.now()}@students.midlandstate.demo`;
+  await page.goto("/login");
+  await expectAccessible(page);
+  await page.getByLabel("Campus email").fill(email);
+  await page.getByRole("button", { name: /email me a sign-in link/i }).click();
+  await expect(page.getByRole("heading", { name: /check your inbox/i })).toBeVisible();
 
-  await page.goto("/onboarding/register");
-  await expect(page.getByRole("heading", { name: /verify your campus email/i })).toBeVisible();
+  // Opening the link must not consume it (email scanners prefetch links).
+  const link = await readLatestLink(email);
+  await page.goto(link);
+  await page.goto(link);
+  await page.getByRole("button", { name: /continue to cohortcove/i }).click();
 
-  const registerScan = await new AxeBuilder({ page }).analyze();
-  expect(registerScan.violations, JSON.stringify(registerScan.violations, null, 2)).toEqual([]);
+  await expect(page).toHaveURL(/\/welcome$/);
+  await expectAccessible(page);
+  await page.getByLabel(/what should we call you/i).fill("E2E Student");
+  await page.getByText("Sports & Recreation", { exact: true }).click();
+  await page.getByLabel(/community guidelines/i).check();
+  await page.getByRole("button", { name: /start exploring/i }).click();
 
-  await page.getByLabel(/institutional email/i).fill(email);
-  await page.getByRole("button", { name: /send verification link/i }).click();
-  await expect(page.getByRole("heading", { name: /check your email/i })).toBeVisible();
-
-  const verifyUrl = await readLatestVerifyLink(email);
-  await page.goto(verifyUrl);
-
-  // Verification redirects into the app; the personalized feed is the landing screen.
   await expect(page).toHaveURL(/\/feed$/);
+  await expect(page.getByText(/matches your interest in "sports & recreation"/i).first()).toBeVisible();
+  await expectAccessible(page);
 
-  await page.goto("/events");
-  await expect(page.getByRole("heading", { name: /upcoming at midland state/i })).toBeVisible();
+  await page.goto("/events?view=calendar");
+  await expect(page.getByRole("table")).toBeVisible();
+  await expectAccessible(page);
 
-  const eventsScan = await new AxeBuilder({ page }).analyze();
-  expect(eventsScan.violations, JSON.stringify(eventsScan.violations, null, 2)).toEqual([]);
+  await page.goto("/search?q=harvest&cost=free");
+  await expect(page.getByRole("link", { name: "Fall harvest & pantry drive" })).toBeVisible();
+  await expectAccessible(page);
+  await page.getByRole("link", { name: "Fall harvest & pantry drive" }).click();
 
-  const firstEventLink = page.locator('main a[href^="/events/"]').first();
-  await expect(firstEventLink).toBeVisible();
-  await firstEventLink.click();
+  await page.getByRole("button", { name: /rsvp — i'm going/i }).click();
+  await expect(page.getByText(/you're going! we'll let you know/i)).toBeVisible();
+  await expect(page.getByRole("link", { name: /add to calendar/i })).toBeVisible();
+  await expectAccessible(page);
 
-  await expect(page.getByRole("button", { name: /rsvp|join waitlist/i })).toBeVisible();
-  const rsvpButton = page.getByRole("button", { name: /rsvp|join waitlist/i });
-  const wasWaitlist = (await rsvpButton.textContent())?.toLowerCase().includes("waitlist");
-  await rsvpButton.click();
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: /cancel my rsvp/i }).click();
+  await expect(page.getByText(/your spot is released/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /rsvp — i'm going/i })).toBeVisible();
+});
 
-  if (wasWaitlist) {
-    await expect(page.getByRole("button", { name: /leave waitlist/i })).toBeVisible();
-    await page.getByRole("button", { name: /leave waitlist/i }).click();
-    await expect(page.getByRole("button", { name: /join waitlist/i })).toBeVisible();
-  } else {
-    await expect(page.getByRole("button", { name: /cancel rsvp/i })).toBeVisible();
-    await page.getByRole("button", { name: /cancel rsvp/i }).click();
-    await expect(page.getByRole("button", { name: /^rsvp$/i })).toBeVisible();
-  }
+test("a full event offers the waitlist", async ({ page }) => {
+  const email = `e2e-wait-${Date.now()}@${STUDENT_DOMAIN}`;
+  await page.goto("/login");
+  await page.getByLabel("Campus email").fill(email);
+  await page.getByRole("button", { name: /email me a sign-in link/i }).click();
+  await expect(page.getByRole("heading", { name: /check your inbox/i })).toBeVisible();
+  await page.goto(await readLatestLink(email));
+  await page.getByRole("button", { name: /continue to cohortcove/i }).click();
+  await expect(page).toHaveURL(/\/welcome$/);
 
-  const eventDetailScan = await new AxeBuilder({ page }).analyze();
-  expect(eventDetailScan.violations, JSON.stringify(eventDetailScan.violations, null, 2)).toEqual([]);
+  await page.goto("/search?q=Halloween");
+  await page.getByRole("link", { name: "Halloween pops concert" }).click();
+  await page.getByRole("button", { name: /join the waitlist/i }).click();
+  await expect(page.getByText(/you're on the waitlist/i).first()).toBeVisible();
 });
 
 test.afterAll(async () => {

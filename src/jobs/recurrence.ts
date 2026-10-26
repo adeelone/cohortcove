@@ -7,9 +7,10 @@ const DEFAULT_HORIZON_DAYS = 120;
  * Generate EventOccurrence rows for a series' recurrence rule up to its
  * bounded horizon. Idempotent/safe to call repeatedly (e.g. from a cron
  * sweep extending the horizon, or right after an organizer edits the
- * rule): occurrences are keyed by exact start instant, so already-existing
- * rows — including ones an organizer has individually edited as
- * isException — are never duplicated or overwritten.
+ * rule): occurrences are keyed by the slot the rule generated
+ * (originalStartAtUtc), so already-existing rows — including ones an
+ * organizer moved to a different time as an exception — are never
+ * duplicated or overwritten.
  */
 export async function regenerateOccurrencesForSeries(seriesId: string): Promise<{ created: number }> {
   const series = await prisma.eventSeries.findUniqueOrThrow({ where: { id: seriesId } });
@@ -21,13 +22,13 @@ export async function regenerateOccurrencesForSeries(seriesId: string): Promise<
 
   const template = await prisma.eventOccurrence.findFirst({
     where: { eventSeriesId: seriesId },
-    orderBy: { startAtUtc: "asc" },
+    orderBy: { createdAt: "asc" },
   });
   if (!template) return { created: 0 };
 
   const starts = generateOccurrenceStarts({
     rule,
-    firstStartUtc: template.startAtUtc,
+    firstStartUtc: template.originalStartAtUtc ?? template.startAtUtc,
     timeZone: series.timeZone,
     horizonEnd,
   });
@@ -36,17 +37,18 @@ export async function regenerateOccurrencesForSeries(seriesId: string): Promise<
 
   const existing = await prisma.eventOccurrence.findMany({
     where: { eventSeriesId: seriesId },
-    select: { startAtUtc: true },
+    select: { startAtUtc: true, originalStartAtUtc: true },
   });
-  const existingTimes = new Set(existing.map((e) => e.startAtUtc.getTime()));
+  const existingSlots = new Set(existing.map((e) => (e.originalStartAtUtc ?? e.startAtUtc).getTime()));
 
   let created = 0;
   for (const start of starts) {
-    if (existingTimes.has(start.getTime())) continue;
+    if (existingSlots.has(start.getTime())) continue;
     await prisma.eventOccurrence.create({
       data: {
         eventSeriesId: seriesId,
         startAtUtc: start,
+        originalStartAtUtc: start,
         endAtUtc: new Date(start.getTime() + durationMs),
         timeZone: series.timeZone,
         venueId: template.venueId,
@@ -63,7 +65,10 @@ export async function regenerateOccurrencesForSeries(seriesId: string): Promise<
 /** Extend every active recurring series' horizon by one window. Meant to run on a schedule (Vercel Cron / local BullMQ repeat job). */
 export async function extendAllRecurrenceHorizons(): Promise<{ seriesProcessed: number; occurrencesCreated: number }> {
   const series = await prisma.eventSeries.findMany({
-    where: { recurrenceRule: { not: null }, approvalStatus: { in: ["PUBLISHED", "PENDING_APPROVAL", "DRAFT"] } },
+    where: {
+      recurrenceRule: { not: null },
+      approvalStatus: { in: ["PUBLISHED", "PENDING_APPROVAL", "DRAFT", "CHANGES_REQUESTED"] },
+    },
     select: { id: true },
   });
 

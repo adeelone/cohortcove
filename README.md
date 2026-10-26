@@ -1,91 +1,101 @@
 # CohortCove
 
-Working name for the former **Campus Connect** concept — a lightweight, institution-scoped campus bulletin board where verified students discover events and organizations. See `BRIEF.md` for the full product brief this build follows, `ROADMAP.md` for what's built vs. not, and `AUDIT.md` for an honest requirement-by-requirement status.
+**The trustworthy campus events board.** Verified students discover and RSVP to events from approved organizations; student-life teams get approvals, fair waitlists, moderation, analytics and a clean audit trail — without turning campus life into a social feed.
 
-**Not affiliated with any real university.** Ships with one fictional demo institution ("Midland State University (Demo)"). Complete institution-name, trademark, domain, and app-store clearance before any real release.
+CohortCove is a multi-tenant SaaS: any institution can sign up at `/start`, claim its email domains, and run its own isolated campus workspace on a free or paid plan.
 
-## Status
+> Not affiliated with any university. The bundled demo campus ("Midland State University (Demo)") is fictional. Complete name/trademark clearance and your institution's legal and privacy review before using this with real students.
 
-This build covers essentially every required journey in `BRIEF.md`: institution email verification, personalized feed + chronological alternative, search/filters, RSVP/waitlist with a proven concurrency guarantee, saved events + ICS export, organization request/verification, organizer event drafting through publish/cancel with recurrence, notifications, reporting/moderation/appeals, uploads, and profile/privacy (export + deletion). It has been deployed live against a real hosted Postgres database. See `AUDIT.md` for the row-by-row status — some things (real transactional email, malware scanning, a persisted session list) are explicitly PARTIAL by design, not oversights.
+- `AUDIT.md` — what the latest audit found and fixed, and the requirement-by-requirement status (PASS/PARTIAL/FAIL with evidence)
+- `BRIEF.md` — the product brief this build follows
+- `ROADMAP.md` — what's next
+
+## What's in the box
+
+**For students** — campus-email sign-in (no passwords) · onboarding with interests and notification preferences · an explainable "For you" feed plus chronological and month-calendar views · search with shareable filters · RSVPs that can't overbook, with automatic first-in-first-out waitlists · saved events · one-tap `.ics` files and a private subscribable calendar feed · notifications for confirmations, waitlist moves, reminders, changes and cancellations · data export and self-service account deletion.
+
+**For organizers** — organization requests with evidence and sponsors · officer roster · event editor for in-person/online/hybrid and recurring events with DST-correct times · preview, submit, publish, per-date edits and cancellations that notify attendees · attendee lists (CSV export on paid plans) · aggregate analytics.
+
+**For moderators** — queues for organization requests, event approvals and reports · standardized reason codes · reversible actions · private notes · appeals · full audit trail.
+
+**For campus admins** — members and roles (with instant session revocation on suspension) · email domains · categories, campuses and venues (including private locations) · brand color · optional public events calendar · plan, usage, checkout and invoices · audit-log export.
+
+**Plans** (`src/lib/plans.ts`): Starter (free; 250 students, 8 orgs, 25 events/month), Growth ($149/mo; analytics, CSV export, branding, public calendar), Campus ($499/mo; unlimited, multi-campus, audit export). Paid plans start with a 14-day trial and fall back to Starter automatically.
+
+> **Billing is simulated.** The checkout page collects no card details and no money moves; a mock provider activates plans and issues invoices. `src/server/billing.ts` documents where a real provider (e.g. Stripe Checkout + webhooks) plugs in.
 
 ## Stack
 
-- Next.js 14 (App Router) + React 18 + TypeScript
-- PostgreSQL via Prisma
-- Tailwind CSS
-- Vitest (unit/integration, run against a real Postgres) + Playwright (e2e, with axe-core accessibility scans)
+Next.js 15 (App Router, server actions) · React 19 · TypeScript · PostgreSQL + Prisma 6 · Tailwind CSS · zod · Vitest 4 (against real Postgres) · Playwright + axe-core. Hosted on Vercel with Supabase Postgres; also ships a Docker image.
 
-## Jobs on serverless
+## Quick start
 
-The brief calls for Redis/BullMQ-backed jobs. Long-running BullMQ workers don't fit a serverless deploy target, so:
-
-- **Event-driven jobs** (waitlist promotion on cancellation/capacity increase, all notification delivery) run **inline** in the server action that triggers them — see `src/server/rsvp.ts`, `src/server/events.ts`.
-- **Time-driven jobs** (reminders, recurrence-horizon extension, retention) run via authenticated cron routes (`src/app/api/cron/*`) triggered by Vercel Cron (`vercel.json`) in production, or can still be run against BullMQ/Redis locally via `docker-compose.yml` for realistic async testing.
-
-This is a deliberate adaptation, documented here and in `AUDIT.md` — not a silent shortcut.
-
-## Requirements
-
-- Node.js >= 20.11
-- A Postgres database — either `docker-compose up -d postgres` locally, or a hosted instance (this project's live deploy uses Supabase)
-- npm (the committed lockfile is the reproducible dependency source)
-
-## Local setup
+Requirements: Node.js 20.18+ (22 recommended), PostgreSQL 14+.
 
 ```bash
-cp .env.example .env
-# edit .env: set a real AUTH_SECRET (openssl rand -base64 32) and DATABASE_URL/DIRECT_URL
-
+cp .env.example .env               # set AUTH_SECRET: openssl rand -base64 32
+docker compose up -d postgres      # or point DATABASE_URL/DIRECT_URL at any Postgres
 npm ci
-npx prisma migrate deploy
-npm run prisma:seed
-
+npm run db:migrate
+npm run prisma:seed                # fictional demo campus (safe to re-run; it resets)
 npm run dev
-# open http://localhost:3000 — register with e.g. student1@students.midlandstate.demo
-# the verification link is written to .local-emails/ (EMAIL_ADAPTER=console)
 ```
 
-To promote the first admin (there's no self-service path, by design):
+Open http://localhost:3000. With `DEMO_MODE=true` the sign-in page offers one-click demo personas (student, organizer, moderator, campus admin). Otherwise sign in as e.g. `student1@students.midlandstate.demo`; with `EMAIL_ADAPTER=console` the link is written to `.local-emails/`.
+
+To start your own campus locally, use `/start` with any domain you can receive mail at (or read the link from `.local-emails/`). To promote an existing verified member to admin out-of-band: `npm run bootstrap-admin -- someone@campus.edu`.
+
+## Configuration
+
+All variables are documented in `.env.example`.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL`, `DIRECT_URL` | yes | Pooled and direct Postgres connections (direct is used for migrations) |
+| `AUTH_SECRET` | yes | ≥32 random chars; signs sessions and reauthentication links |
+| `NEXT_PUBLIC_APP_URL` | prod | Public URL for emails and calendar feeds (falls back to `VERCEL_URL`) |
+| `CRON_SECRET` | prod | Bearer token Vercel Cron sends to `/api/cron/*` |
+| `EMAIL_ADAPTER`, `RESEND_API_KEY`, `EMAIL_FROM` | prod | `resend` delivers real email; `db`/`console` only record it |
+| `STORAGE_ADAPTER`, `SUPABASE_*` | prod | `supabase` stores logos/event images in Supabase Storage; `local` is dev-only |
+| `DEMO_MODE` | no | Demo personas, nightly demo reset, on-screen links for sandbox campuses |
+
+**Sandbox campuses.** If a deployment has `DEMO_MODE=true` but no email provider, campuses created at `/start` are marked as sandboxes: their sign-in links are shown on screen (they can't be verified by email) and the app shows a banner saying so. Configure Resend to create real, verified campuses.
+
+## Testing
 
 ```bash
-npm run bootstrap-admin -- student1@students.midlandstate.demo
+npm run typecheck && npm run lint
+npm run test                       # 50 unit/integration tests against a real Postgres
+npm run build && npm run test:e2e  # 6 Playwright journeys with WCAG 2.2 AA axe scans
 ```
 
-## Running tests
+The e2e suite covers: joining and onboarding through the real email link, discovery (feed, calendar, search), RSVP/waitlist/cancel; organization request → approval → event draft → hidden-link check → submit → approve → RSVP → capacity change → cancellation notice; report → unpublish → appeal (reporter and private notes hidden from the officer) → restore with audit rows; and campus signup → trial → checkout → invoice → plan-gated audit export → brand-color contrast validation.
 
-```bash
-# Unit/integration tests run against a real Postgres — local docker-compose or a hosted instance both work
-npx prisma migrate deploy
-npm run test
+Concurrency proofs: `test/server/rsvp.concurrency.test.ts` (20 simultaneous RSVPs for 1 seat → exactly 1 confirmed) and `test/server/rsvp.promotion.test.ts` (concurrent promotion runs promote exactly once). Every bug fixed in the audit has a named regression test in `test/server/security-regressions.test.ts`.
 
-# e2e (builds first, then runs against a production server — dev mode's
-# on-demand compilation is too slow/flaky for these timeouts)
-npm run build
-npm run test:e2e
-```
-
-`test/server/rsvp.concurrency.test.ts` and `test/server/rsvp.promotion.test.ts` are the brief's required concurrency proofs: 20 simultaneous RSVP attempts against a 1-seat event produce exactly one confirmed RSVP, and calling the waitlist-promotion job concurrently/repeatedly promotes exactly one person — both against a real Postgres instance with row locking, not a mock.
+If your machine has a preinstalled Chromium that doesn't match Playwright's, set `PLAYWRIGHT_CHROMIUM_PATH`.
 
 ## Architecture notes
 
-- **Institution boundary**: every institution-owned table carries or derives `institutionId`. Every server read/write in `src/server/*` and `src/app/**` filters by the current session's `institutionId` from `getCurrentMembership()` — never by a client-supplied id. See `src/lib/auth.ts`.
-- **RSVP/waitlist correctness**: `src/server/rsvp.ts` takes a Postgres row lock (`SELECT ... FOR UPDATE`) on the occurrence before counting capacity, so concurrent RSVP requests for the last seat cannot both succeed. Waitlist promotion (`promoteNextWaitlistEntry`) is idempotent and runs inline on cancellation/capacity changes.
-- **Time zones**: occurrences store both a UTC instant and the authoring IANA time zone (`src/lib/time.ts`), and re-derive UTC from wall-clock + zone rather than a fixed offset, so DST transitions don't silently shift events. Recurrence generation (`src/lib/recurrence.ts`) uses the same approach — see its DST unit test.
-- **Email**: `src/lib/email.ts` supports `console` (writes to `.local-emails/`, local dev) and `db` (writes to the `EmailOutbox` table, viewable at `/dev/outbox` — used on the live deploy since serverless disk writes don't persist). `smtp` is an intentionally unimplemented integration point. None of these is a real production email provider — see `AUDIT.md`.
-- **Uploads**: `src/lib/storage.ts` supports `local` (disk, dev) and `supabase` (Supabase Storage REST API). Validation (type/size/dimension) and the malware-scan integration point are in `src/server/uploads.ts`.
-- **Reauthentication**: export and account deletion require confirming a fresh, short-lived, single-purpose link emailed to the user (`src/server/step-up.ts`) — CohortCove has no password, so "reauthenticate" means proving fresh access to the verified inbox again.
+- **Tenancy.** Every institution-owned row carries or derives `institutionId`. Guards in `src/server/guards.ts` resolve the session's membership; every server function takes the caller's institution and scopes its query — client-supplied ids are never trusted on their own. An email's domain alone resolves the institution (`AllowedDomain.domain` is globally unique).
+- **Sessions.** Stateless JWT cookie carrying `User.sessionVersion`; bumping it signs a user out everywhere (used by "sign out of all devices", suspension and deletion). The session lookup is cached per request.
+- **Magic links.** Opening a link never consumes it (scanners prefetch links); a POST from the confirm page does, atomically.
+- **Discovery rules** live in one place (`src/server/discovery.ts`): published events from approved organizations, with drafts visible only to their officers and moderators, and private venues hidden from non-attendees.
+- **RSVP correctness.** `SELECT … FOR UPDATE` on the occurrence before counting capacity; promotion is idempotent and deterministic.
+- **Time zones.** UTC instants plus the authoring IANA zone; recurrence math happens in wall-clock time so a 6pm meeting stays 6pm across DST. Moved occurrences keep their original slot so regeneration never duplicates them.
+- **Jobs.** Event-driven work (promotion, notifications) runs inline; time-driven work runs through authenticated cron routes: reminders, recurrence horizon, retention, billing (trial expiry, renewals, scheduled cancellations) and the demo reset. All are daily so they fit Vercel's Hobby plan; each is idempotent.
+- **Known framework pitfall.** Don't add a `loading.tsx` to the `(app)` route group: in Next 15 it causes server-action `redirect()`s to be silently dropped (the submit button spins forever). The e2e suite catches this.
 
-## Deployment
+## Deployment (Vercel + Supabase)
 
-The live demo deploy targets Vercel + a hosted Postgres (Supabase). To deploy your own:
+1. Create a Supabase project. Use the **transaction pooler** URL (port 6543, append `?pgbouncer=true&connection_limit=1`) as `DATABASE_URL` and the **session/direct** URL as `DIRECT_URL`.
+2. Optional: create a private Storage bucket `cohortcove-uploads` and set `STORAGE_ADAPTER=supabase` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+3. Import the repository in Vercel and set the environment variables above. `vercel.json` sets the build command to `npm run vercel-build`, which runs `prisma migrate deploy` before `next build`, and registers the cron jobs.
+4. Seed the demo campus once if you want it (`npm run prisma:seed` against the production database) and set `DEMO_MODE=true` for a public demo.
+5. For real customers: configure Resend with a verified domain, set `NEXT_PUBLIC_APP_URL` to your domain, and replace the mock billing provider.
 
-1. Provision a Postgres database and run `npx prisma migrate deploy` against it.
-2. Set env vars on your host: `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET`, `CRON_SECRET`, `NEXT_PUBLIC_APP_URL`, `EMAIL_ADAPTER=db` (or `console` if disk persists), `STORAGE_ADAPTER` (`local` or `supabase` + its `SUPABASE_*` vars).
-3. Deploy. `vercel.json` registers the cron routes (`/api/cron/reminders`, `/recurrence`, `/retention`) — Vercel automatically sends `CRON_SECRET` as a bearer token to these when the env var is set.
-4. Run `npm run prisma:seed` once against the production database for demo data, and `npm run bootstrap-admin -- <email>` to create the first admin.
+Self-hosting: `docker build -t cohortcove .`, run `npx prisma migrate deploy` against your database, then `docker run -p 3000:3000 --env-file .env cohortcove`.
 
-A `Dockerfile` is included for self-hosting outside Vercel (plain `next start`, not standalone output — see its comments for why).
+## Data retention
 
-## What's deliberately out of scope
-
-See `ROADMAP.md` and `AUDIT.md` for the full, current list. Highlights: campus SSO/SAML/OIDC, a real transactional email provider, real malware scanning, a persisted multi-session/device list, and institutional legal/privacy review — none of these are things a demo build can honestly claim to have solved.
+Read notifications: 180 days. Expired verification tokens: cleared after 24h. Revoked calendar links, email outbox records and abandoned checkouts: 30 days. Rate-limit bookkeeping: 2 days. Moderation evidence and audit events are retained. Account deletion cancels RSVPs, removes saved events/follows/notifications, anonymizes the profile and revokes sessions. See `src/jobs/retention.ts`.

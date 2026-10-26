@@ -11,6 +11,9 @@ import { logger } from "@/lib/logger";
  *   already unusable past expiry — this just stops them lingering in the
  *   DB indefinitely).
  * - Revoked calendar tokens: purged after 30 days.
+ * - Rate-limit bookkeeping rows: purged after 2 days (windows are ≤ 1 hour).
+ * - Email outbox records (EMAIL_ADAPTER=db): purged after 30 days.
+ * - Expired checkout sessions: purged after 30 days.
  *
  * Moderation evidence (Report/ModerationCase/ModerationAction/Appeal) and
  * AuditEvent rows are never auto-deleted here — those are exactly the
@@ -36,10 +39,21 @@ export async function runRetentionSweep(): Promise<Record<string, number>> {
     where: { revokedAt: { not: null, lt: new Date(now - 30 * 24 * 60 * 60 * 1000) } },
   });
 
+  const [rateLimitHits, outbox, checkouts] = await Promise.all([
+    prisma.rateLimitHit.deleteMany({ where: { createdAt: { lt: new Date(now - 2 * 24 * 60 * 60 * 1000) } } }),
+    prisma.emailOutbox.deleteMany({ where: { createdAt: { lt: new Date(now - 30 * 24 * 60 * 60 * 1000) } } }),
+    prisma.checkoutSession.deleteMany({
+      where: { status: { not: "COMPLETED" }, createdAt: { lt: new Date(now - 30 * 24 * 60 * 60 * 1000) } },
+    }),
+  ]);
+
   const result = {
     notificationsPurged: oldNotifications.count,
     staleVerificationTokensCleared: staleTokens.count,
     revokedCalendarTokensPurged: oldRevokedCalendarTokens.count,
+    rateLimitHitsPurged: rateLimitHits.count,
+    outboxRecordsPurged: outbox.count,
+    checkoutSessionsPurged: checkouts.count,
   };
 
   logger.info("retention.sweep.completed", result);

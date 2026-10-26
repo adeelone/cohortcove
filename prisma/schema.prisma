@@ -6,7 +6,9 @@
 // institution — never trust a client-supplied institutionId alone.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" covers local dev and Vercel; musl is for the Alpine Docker image.
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -20,37 +22,47 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Institution {
-  id        String   @id @default(cuid())
-  publicId  String   @unique @default(cuid())
-  name      String
-  slug      String   @unique
-  timeZone  String // IANA time zone used as the institution default
-  isDemo    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  publicId              String   @unique @default(cuid())
+  name                  String
+  slug                  String   @unique
+  timeZone              String // IANA time zone used as the institution default
+  isDemo                Boolean  @default(true) // demo/sandbox tenant: fictional data, emails may be shown on-screen instead of delivered
+  tagline               String?
+  accentColor           String? // hex, e.g. "#AE4A1D" — custom branding is a paid-plan feature
+  publicCalendarEnabled Boolean  @default(false) // lets visitors see events organizers mark public (brief: "Visitor: public events only if the institution permits them")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  allowedDomains AllowedDomain[]
-  campuses       Campus[]
-  memberships    InstitutionalMembership[]
-  organizations  Organization[]
-  venues         Venue[]
-  categories     Category[]
-  tags           Tag[]
-  eventSeries    EventSeries[]
+  subscription     Subscription?
+  invoices         Invoice[]
+  checkoutSessions CheckoutSession[]
+
+  allowedDomains  AllowedDomain[]
+  campuses        Campus[]
+  memberships     InstitutionalMembership[]
+  organizations   Organization[]
+  venues          Venue[]
+  categories      Category[]
+  tags            Tag[]
+  eventSeries     EventSeries[]
   moderationCases ModerationCase[]
-  auditEvents    AuditEvent[]
+  auditEvents     AuditEvent[]
 
   @@index([slug])
 }
 
 model AllowedDomain {
-  id            String      @id @default(cuid())
+  id            String         @id @default(cuid())
   institutionId String
-  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  institution   Institution    @relation(fields: [institutionId], references: [id], onDelete: Cascade)
   domain        String // e.g. "students.midlandstate.demo"
   role          MembershipRole @default(STUDENT) // domain can imply default role (e.g. staff domain)
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime       @default(now())
 
+  // A domain belongs to exactly one institution, so an email address alone
+  // resolves which campus a person is joining.
+  @@unique([domain])
   @@unique([institutionId, domain])
   @@index([institutionId])
 }
@@ -87,29 +99,32 @@ enum MembershipStatus {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  publicId     String   @unique @default(cuid())
-  email        String   @unique
-  passwordHash String? // null until password auth is set; verification is magic-link by default
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  deletedAt    DateTime?
+  id             String    @id @default(cuid())
+  publicId       String    @unique @default(cuid())
+  email          String    @unique
+  passwordHash   String? // null until password auth is set; verification is magic-link by default
+  // Bumped to revoke every outstanding session ("sign out everywhere",
+  // suspension, deletion) — sessions carry the version they were issued at.
+  sessionVersion Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
 
-  memberships          InstitutionalMembership[]
-  profile              Profile?
+  memberships             InstitutionalMembership[]
+  profile                 Profile?
   organizationMemberships OrganizationMembership[]
-  rsvps                RSVP[]
-  waitlistEntries      WaitlistEntry[]
-  savedEvents          SavedEvent[]
-  follows              Follow[]
-  notifications        Notification[]
-  calendarTokens       CalendarToken[]
-  reportsFiled         Report[]                 @relation("ReportsFiled")
-  moderationActionsTaken ModerationAction[]      @relation("ModerationActionsTaken")
-  appeals              Appeal[]
-  uploads              Upload[]
-  auditEvents          AuditEvent[]
-  eventRevisions       EventRevision[]
+  rsvps                   RSVP[]
+  waitlistEntries         WaitlistEntry[]
+  savedEvents             SavedEvent[]
+  follows                 Follow[]
+  notifications           Notification[]
+  calendarTokens          CalendarToken[]
+  reportsFiled            Report[]                  @relation("ReportsFiled")
+  moderationActionsTaken  ModerationAction[]        @relation("ModerationActionsTaken")
+  appeals                 Appeal[]
+  uploads                 Upload[]
+  auditEvents             AuditEvent[]
+  eventRevisions          EventRevision[]
 
   @@index([email])
 }
@@ -118,35 +133,37 @@ model User {
 // more than one institution over time (e.g. transfer); each membership is
 // independently verified and scoped.
 model InstitutionalMembership {
-  id                    String            @id @default(cuid())
+  id                    String           @id @default(cuid())
   userId                String
-  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   institutionId         String
-  institution           Institution       @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-  role                  MembershipRole    @default(STUDENT)
-  status                MembershipStatus  @default(PENDING_VERIFICATION)
+  institution           Institution      @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  role                  MembershipRole   @default(STUDENT)
+  status                MembershipStatus @default(PENDING_VERIFICATION)
   verifiedEmail         String // the institutional email that was verified
   verificationTokenHash String?
   verificationSentAt    DateTime?
   verifiedAt            DateTime?
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
 
   @@unique([userId, institutionId])
   @@index([institutionId, status])
 }
 
 model Profile {
-  id                 String   @id @default(cuid())
-  userId             String   @unique
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  displayName        String
-  interests          String[] @default([])
-  visibility         ProfileVisibility @default(PRIVATE)
-  notifyEmail        Boolean  @default(true)
-  notifyInApp        Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id              String            @id @default(cuid())
+  userId          String            @unique
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName     String
+  interests       String[]          @default([])
+  visibility      ProfileVisibility @default(PRIVATE)
+  notifyEmail     Boolean           @default(true)
+  notifyInApp     Boolean           @default(true)
+  acceptedTermsAt DateTime? // conduct/privacy acceptance during onboarding
+  onboardedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 }
 
 enum ProfileVisibility {
@@ -173,22 +190,22 @@ enum OrganizationMemberRole {
 }
 
 model Organization {
-  id            String      @id @default(cuid())
-  publicId      String      @unique @default(cuid())
-  institutionId String
-  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-  name          String
-  slug          String
-  description   String
-  categoryId    String?
-  category      Category?   @relation(fields: [categoryId], references: [id])
-  contactChannel String
-  isOfficialDepartment Boolean @default(false) // distinguishes verified student org from official dept badge
-  verificationState OrganizationVerificationState @default(REQUESTED)
-  logoUploadId  String?     @unique
-  logoUpload    Upload?     @relation("OrganizationLogo", fields: [logoUploadId], references: [id])
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id                   String                        @id @default(cuid())
+  publicId             String                        @unique @default(cuid())
+  institutionId        String
+  institution          Institution                   @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  name                 String
+  slug                 String
+  description          String
+  categoryId           String?
+  category             Category?                     @relation(fields: [categoryId], references: [id])
+  contactChannel       String
+  isOfficialDepartment Boolean                       @default(false) // distinguishes verified student org from official dept badge
+  verificationState    OrganizationVerificationState @default(REQUESTED)
+  logoUploadId         String?                       @unique
+  logoUpload           Upload?                       @relation("OrganizationLogo", fields: [logoUploadId], references: [id])
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
 
   memberships   OrganizationMembership[]
   verifications OrganizationVerification[]
@@ -202,27 +219,27 @@ model Organization {
 }
 
 model OrganizationMembership {
-  id             String                  @id @default(cuid())
+  id             String                 @id @default(cuid())
   organizationId String
-  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   userId         String
-  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role           OrganizationMemberRole  @default(MEMBER)
-  createdAt      DateTime                @default(now())
+  user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrganizationMemberRole @default(MEMBER)
+  createdAt      DateTime               @default(now())
 
   @@unique([organizationId, userId])
   @@index([organizationId])
 }
 
 model OrganizationVerification {
-  id             String                          @id @default(cuid())
+  id             String                        @id @default(cuid())
   organizationId String
-  organization   Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization                  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   state          OrganizationVerificationState
   evidenceNote   String
   reasonCode     String? // standardized moderator reason code for rejection/changes-requested
   reviewedBy     String? // moderator user id, informational only (not a relation to keep moderator access auditable separately)
-  createdAt      DateTime                        @default(now())
+  createdAt      DateTime                      @default(now())
 
   @@index([organizationId])
 }
@@ -314,23 +331,24 @@ model EventSeries {
   categoryId     String?
   category       Category?    @relation(fields: [categoryId], references: [id])
 
-  title           String
-  summary         String
-  fullDescription String
-  format          EventFormat
-  timeZone        String // IANA tz the series is authored in
-  recurrenceRule  String? // RFC 5545 RRULE string; null = single occurrence
+  title                String
+  summary              String
+  fullDescription      String
+  format               EventFormat
+  timeZone             String // IANA tz the series is authored in
+  recurrenceRule       String? // RFC 5545 RRULE string; null = single occurrence
   recurrenceHorizonEnd DateTime? // bound beyond which occurrences are not pre-generated
 
-  contactName    String
-  contactChannel String
-  cost           String? // free-text ("Free", "$5 suggested donation", ...); no payment processing in MVP
-  eligibility    String?
+  contactName       String
+  contactChannel    String
+  cost              String? // free-text ("Free", "$5 suggested donation", ...); no payment processing in MVP
+  eligibility       String?
   accessibilityInfo String?
-  imageUploadId  String?     @unique
-  imageUpload    Upload?     @relation("EventImage", fields: [imageUploadId], references: [id])
+  imageUploadId     String? @unique
+  imageUpload       Upload? @relation("EventImage", fields: [imageUploadId], references: [id])
 
   approvalStatus EventApprovalStatus @default(DRAFT)
+  isPublic       Boolean             @default(false) // shown on the institution's public calendar when that is enabled
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -340,7 +358,7 @@ model EventSeries {
   tags        EventSeriesTag[]
 
   @@index([institutionId, approvalStatus])
-  @@index([organizationId])
+  @@index([organizationId, approvalStatus])
 }
 
 model EventSeriesTag {
@@ -361,22 +379,26 @@ model EventOccurrence {
   eventSeriesId String
   eventSeries   EventSeries @relation(fields: [eventSeriesId], references: [id], onDelete: Cascade)
 
-  startAtUtc DateTime
-  endAtUtc   DateTime
-  timeZone   String // IANA tz used to render this occurrence to viewers
+  startAtUtc         DateTime
+  endAtUtc           DateTime
+  timeZone           String // IANA tz used to render this occurrence to viewers
+  // The slot the recurrence rule generated. Stays fixed when an organizer
+  // moves this occurrence, so regeneration recognizes the moved occurrence
+  // as already covering its slot instead of recreating the original time.
+  originalStartAtUtc DateTime?
 
-  venueId    String?
-  venue      Venue?  @relation(fields: [venueId], references: [id])
-  onlineUrl  String? // hidden from unauthenticated/unRSVP'd viewers per policy
+  venueId   String?
+  venue     Venue?  @relation(fields: [venueId], references: [id])
+  onlineUrl String? // hidden from unauthenticated/unRSVP'd viewers per policy
 
-  capacity            Int? // null = unlimited
+  capacity             Int? // null = unlimited
   registrationDeadline DateTime?
 
-  isCanceled   Boolean  @default(false)
+  isCanceled   Boolean   @default(false)
   canceledAt   DateTime?
   cancelReason String?
 
-  isException  Boolean  @default(false) // true if this occurrence was individually edited off the series pattern
+  isException Boolean @default(false) // true if this occurrence was individually edited off the series pattern
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -393,14 +415,14 @@ model EventOccurrence {
 // location, access, cancellation). Used to power "change history" on the
 // event detail screen and to drive RSVP-holder notifications.
 model EventRevision {
-  id            String      @id @default(cuid())
-  eventSeriesId String
-  eventSeries   EventSeries @relation(fields: [eventSeriesId], references: [id], onDelete: Cascade)
+  id             String      @id @default(cuid())
+  eventSeriesId  String
+  eventSeries    EventSeries @relation(fields: [eventSeriesId], references: [id], onDelete: Cascade)
   editedByUserId String
-  editedBy      User        @relation(fields: [editedByUserId], references: [id])
-  summary       String // human-readable description of what changed
-  diff          Json // structured before/after for the changed fields
-  createdAt     DateTime    @default(now())
+  editedBy       User        @relation(fields: [editedByUserId], references: [id])
+  summary        String // human-readable description of what changed
+  diff           Json // structured before/after for the changed fields
+  createdAt      DateTime    @default(now())
 
   @@index([eventSeriesId])
 }
@@ -415,14 +437,14 @@ enum RsvpStatus {
 }
 
 model RSVP {
-  id            String           @id @default(cuid())
-  userId        String
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  occurrenceId  String
-  occurrence    EventOccurrence  @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
-  status        RsvpStatus       @default(GOING)
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  occurrenceId String
+  occurrence   EventOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  status       RsvpStatus      @default(GOING)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   // One RSVP/waitlist state per person per occurrence: enforced at the
   // database level, not just in application code.
@@ -438,16 +460,16 @@ enum WaitlistStatus {
 }
 
 model WaitlistEntry {
-  id           String          @id @default(cuid())
-  userId       String
-  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  occurrenceId String
-  occurrence   EventOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
-  status       WaitlistStatus  @default(WAITING)
-  position     Int // deterministic FIFO order within the occurrence
-  promotedAt   DateTime?
+  id                 String          @id @default(cuid())
+  userId             String
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  occurrenceId       String
+  occurrence         EventOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  status             WaitlistStatus  @default(WAITING)
+  position           Int // deterministic FIFO order within the occurrence
+  promotedAt         DateTime?
   promotionExpiresAt DateTime? // if promotion requires confirmation before expiry
-  createdAt    DateTime        @default(now())
+  createdAt          DateTime        @default(now())
 
   @@unique([userId, occurrenceId])
   @@index([occurrenceId, status, position])
@@ -489,28 +511,32 @@ enum NotificationType {
   EVENT_MATERIAL_CHANGE
   EVENT_CANCELLATION
   MODERATION_UPDATE
+  FOLLOWED_ORG_EVENT
+  OFFICER_ROLE
+  BILLING
 }
 
 model Notification {
-  id        String            @id @default(cuid())
+  id        String           @id @default(cuid())
   userId    String
-  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   type      NotificationType
   payload   Json
   readAt    DateTime?
   // idempotency key so retried jobs never send/create the same notification twice
-  dedupeKey String            @unique
-  createdAt DateTime          @default(now())
+  dedupeKey String           @unique
+  createdAt DateTime         @default(now())
 
   @@index([userId, readAt])
+  @@index([userId, createdAt])
 }
 
 model CalendarToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
-  createdAt DateTime @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
   revokedAt DateTime?
 
   @@index([userId])
@@ -545,16 +571,16 @@ enum ReportStatus {
 }
 
 model Report {
-  id            String            @id @default(cuid())
+  id            String           @id @default(cuid())
   institutionId String
   reporterId    String
-  reporter      User              @relation("ReportsFiled", fields: [reporterId], references: [id])
+  reporter      User             @relation("ReportsFiled", fields: [reporterId], references: [id])
   targetType    ReportTargetType
   targetId      String
   reasonCode    ReportReasonCode
   details       String
-  status        ReportStatus      @default(OPEN)
-  createdAt     DateTime          @default(now())
+  status        ReportStatus     @default(OPEN)
+  createdAt     DateTime         @default(now())
 
   moderationCase ModerationCase?
 
@@ -568,16 +594,16 @@ enum ModerationCaseState {
 }
 
 model ModerationCase {
-  id            String               @id @default(cuid())
+  id            String              @id @default(cuid())
   institutionId String
-  institution   Institution          @relation(fields: [institutionId], references: [id], onDelete: Cascade)
-  reportId      String?              @unique
-  report        Report?              @relation(fields: [reportId], references: [id])
+  institution   Institution         @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  reportId      String?             @unique
+  report        Report?             @relation(fields: [reportId], references: [id])
   targetType    ReportTargetType
   targetId      String
-  state         ModerationCaseState  @default(OPEN)
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  state         ModerationCaseState @default(OPEN)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   actions ModerationAction[]
   appeals Appeal[]
@@ -596,15 +622,15 @@ enum ModerationActionType {
 }
 
 model ModerationAction {
-  id               String                @id @default(cuid())
+  id               String               @id @default(cuid())
   moderationCaseId String
-  moderationCase   ModerationCase        @relation(fields: [moderationCaseId], references: [id], onDelete: Cascade)
+  moderationCase   ModerationCase       @relation(fields: [moderationCaseId], references: [id], onDelete: Cascade)
   actionType       ModerationActionType
   reasonCode       String
   privateNote      String? // never shown to the reported user
   takenByUserId    String
-  takenBy          User                  @relation("ModerationActionsTaken", fields: [takenByUserId], references: [id])
-  createdAt        DateTime              @default(now())
+  takenBy          User                 @relation("ModerationActionsTaken", fields: [takenByUserId], references: [id])
+  createdAt        DateTime             @default(now())
 
   @@index([moderationCaseId])
 }
@@ -617,16 +643,16 @@ enum AppealState {
 }
 
 model Appeal {
-  id               String         @id @default(cuid())
-  moderationCaseId String
-  moderationCase   ModerationCase @relation(fields: [moderationCaseId], references: [id], onDelete: Cascade)
+  id                String         @id @default(cuid())
+  moderationCaseId  String
+  moderationCase    ModerationCase @relation(fields: [moderationCaseId], references: [id], onDelete: Cascade)
   submittedByUserId String
-  submittedBy      User           @relation(fields: [submittedByUserId], references: [id])
-  state            AppealState    @default(SUBMITTED)
-  statement        String
-  decisionNote     String?
-  createdAt        DateTime       @default(now())
-  resolvedAt       DateTime?
+  submittedBy       User           @relation(fields: [submittedByUserId], references: [id])
+  state             AppealState    @default(SUBMITTED)
+  statement         String
+  decisionNote      String?
+  createdAt         DateTime       @default(now())
+  resolvedAt        DateTime?
 
   @@index([moderationCaseId])
 }
@@ -642,18 +668,18 @@ enum UploadStatus {
 }
 
 model Upload {
-  id             String         @id @default(cuid())
+  id             String        @id @default(cuid())
   ownerUserId    String
-  ownerUser      User           @relation(fields: [ownerUserId], references: [id])
+  ownerUser      User          @relation(fields: [ownerUserId], references: [id])
   organizationId String?
-  organization   Organization?  @relation(fields: [organizationId], references: [id])
-  storageKey     String         @unique // random, non-guessable object key
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  storageKey     String        @unique // random, non-guessable object key
   mimeType       String
   byteSize       Int
   width          Int?
   height         Int?
-  status         UploadStatus   @default(PENDING_SCAN)
-  createdAt      DateTime       @default(now())
+  status         UploadStatus  @default(PENDING_SCAN)
+  createdAt      DateTime      @default(now())
 
   organizationLogoFor Organization? @relation("OrganizationLogo")
   eventImageFor       EventSeries?  @relation("EventImage")
@@ -684,17 +710,120 @@ model EmailOutbox {
 // ---------------------------------------------------------------------------
 
 model AuditEvent {
-  id            String      @id @default(cuid())
+  id            String       @id @default(cuid())
   institutionId String?
   institution   Institution? @relation(fields: [institutionId], references: [id])
   actorUserId   String?
-  actor         User?       @relation(fields: [actorUserId], references: [id])
+  actor         User?        @relation(fields: [actorUserId], references: [id])
   action        String // e.g. "organization.verification.approved"
   targetType    String
   targetId      String
   metadata      Json?
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime     @default(now())
 
   @@index([institutionId, createdAt])
   @@index([targetType, targetId])
+  @@index([actorUserId, action, createdAt])
+}
+
+// Generic sliding-window limiter for actions with no signed-in actor yet
+// (sign-in links, campus sign-ups), keyed by e.g. "auth-email:<email>" or
+// "auth-ip:<ip>". Swept by the retention job.
+model RateLimitHit {
+  id        String   @id @default(cuid())
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Plans & billing
+// ---------------------------------------------------------------------------
+
+enum PlanTier {
+  FREE
+  PRO
+  CAMPUS
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  institutionId          String             @unique
+  institution            Institution        @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  plan                   PlanTier           @default(FREE)
+  status                 SubscriptionStatus @default(ACTIVE)
+  interval               BillingInterval    @default(MONTHLY)
+  trialEndsAt            DateTime?
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  // Which billing provider owns this subscription ("mock" in this build;
+  // a real provider would also populate the external ids).
+  provider               String             @default("mock")
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  invoices Invoice[]
+}
+
+enum InvoiceStatus {
+  PAID
+  OPEN
+  VOID
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  publicId       String        @unique @default(cuid())
+  number         String        @unique
+  institutionId  String
+  institution    Institution   @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  subscriptionId String
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  description    String
+  amountCents    Int
+  currency       String        @default("usd")
+  status         InvoiceStatus @default(PAID)
+  periodStart    DateTime
+  periodEnd      DateTime
+  createdAt      DateTime      @default(now())
+
+  @@index([institutionId, createdAt])
+}
+
+enum CheckoutStatus {
+  OPEN
+  COMPLETED
+  EXPIRED
+}
+
+model CheckoutSession {
+  id              String          @id @default(cuid())
+  publicId        String          @unique @default(cuid())
+  institutionId   String
+  institution     Institution     @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  createdByUserId String
+  plan            PlanTier
+  interval        BillingInterval
+  status          CheckoutStatus  @default(OPEN)
+  expiresAt       DateTime
+  completedAt     DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@index([institutionId])
 }

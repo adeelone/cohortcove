@@ -50,50 +50,74 @@ async function deliverEmailNotification(
   payload: Record<string, unknown>,
 ): Promise<void> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) return;
+  if (!user || user.deletedAt) return;
   const { sendEmail } = await import("@/lib/email");
+  const { appUrl } = await import("@/lib/env");
   const { subject, text } = renderNotificationEmail(type, payload);
-  await sendEmail({ to: user.email, subject, text });
+  const href = typeof payload.href === "string" ? payload.href : null;
+  try {
+    await sendEmail({
+      to: user.email,
+      subject,
+      text,
+      action: href ? { label: "Open in CohortCove", url: `${appUrl()}${href}` } : undefined,
+    });
+  } catch (error) {
+    // The in-app notification already exists; a transient email failure
+    // must not fail the RSVP/moderation action that triggered it.
+    const { logger } = await import("@/lib/logger");
+    logger.error("notification.email.failed", { type, error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
-function renderNotificationEmail(
+export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
+  VERIFICATION: "Account",
+  ORG_APPROVAL: "Review decision",
+  RSVP_CONFIRMATION: "RSVP confirmed",
+  WAITLIST_PROMOTION: "Off the waitlist",
+  EVENT_REMINDER: "Reminder",
+  EVENT_MATERIAL_CHANGE: "Event changed",
+  EVENT_CANCELLATION: "Event canceled",
+  MODERATION_UPDATE: "Moderation",
+  FOLLOWED_ORG_EVENT: "New from an org you follow",
+  OFFICER_ROLE: "Organizer access",
+  BILLING: "Billing",
+};
+
+export function renderNotificationEmail(
   type: NotificationType,
   payload: Record<string, unknown>,
 ): { subject: string; text: string } {
+  const title = typeof payload.title === "string" ? payload.title : null;
+  const summary = typeof payload.summary === "string" ? payload.summary : null;
   switch (type) {
     case "WAITLIST_PROMOTION":
       return {
-        subject: "You're off the waitlist — you're going!",
-        text: "A seat opened up and you've been moved from the waitlist to confirmed. Check the event page for details.",
+        subject: title ? `You're in: ${title}` : "You're off the waitlist — you're going!",
+        text: summary ?? "A seat opened up and you've been moved from the waitlist to confirmed.",
       };
     case "RSVP_CONFIRMATION":
-      return { subject: "RSVP confirmed", text: "Your RSVP is confirmed. See you there!" };
+      return { subject: title ? `RSVP confirmed: ${title}` : "RSVP confirmed", text: summary ?? "Your RSVP is confirmed. See you there!" };
     case "EVENT_MATERIAL_CHANGE":
       return {
-        subject: "An event you're going to has changed",
-        text: `Details changed: ${String(payload.summary ?? "See the event page for what changed.")}`,
+        subject: title ? `Updated: ${title}` : "An event you're going to has changed",
+        text: summary ?? "Details changed — see the event page for what changed.",
       };
     case "EVENT_CANCELLATION":
       return {
-        subject: "Event canceled",
-        text: `An event you RSVP'd to was canceled. ${String(payload.reason ?? "")}`.trim(),
+        subject: title ? `Canceled: ${title}` : "Event canceled",
+        text: summary ?? `An event you RSVP'd to was canceled. ${String(payload.reason ?? "")}`.trim(),
       };
     case "EVENT_REMINDER":
-      return { subject: "Reminder: your event is coming up", text: "Your event is coming up soon." };
-    case "ORG_APPROVAL":
       return {
-        subject: "Organization request update",
-        text: `Your organization request status: ${String(payload.state ?? "updated")}.`,
+        subject: title ? `Tomorrow: ${title}` : "Reminder: your event is coming up",
+        text: summary ?? "Your event is coming up soon.",
       };
-    case "MODERATION_UPDATE":
-      return {
-        subject: "Moderation update on your report or content",
-        text: String(payload.summary ?? "There is an update on a report or moderation case involving you."),
-      };
-    case "VERIFICATION":
-      return { subject: "Verify your CohortCove account", text: "Check the verification link we sent you." };
     default:
-      return { subject: "CohortCove notification", text: "You have a new notification." };
+      return {
+        subject: `CohortCove: ${NOTIFICATION_LABELS[type]}`,
+        text: summary ?? "You have a new notification in CohortCove.",
+      };
   }
 }
 

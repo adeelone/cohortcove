@@ -4,20 +4,59 @@
 
 :root {
   color-scheme: light;
+  --cove-bg: 250 246 240;
+  --cove-surface: 255 255 255;
+  --cove-sunken: 243 237 228;
+  --cove-ink: 43 38 32;
+  --cove-muted: 100 91 81;
+  --cove-border: 231 223 211;
+  --cove-accent: 174 74 29;
+  --cove-accent-ink: 255 255 255;
+  --cove-success: 31 112 69;
+  --cove-warning: 138 90 0;
+  --cove-danger: 176 38 38;
+  --cove-info: 43 98 217;
 }
 
 body {
-  @apply bg-cove-bg text-cove-ink antialiased;
+  @apply bg-cove-bg font-sans text-cove-ink antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 
 /* Visible focus ring everywhere — accessibility requirement (WCAG 2.2 AA). */
 :focus-visible {
-  outline: 3px solid #2B62D9;
+  outline: 3px solid rgb(var(--cove-info));
   outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Native <details> used for no-JS menus and disclosures. */
+details > summary {
+  list-style: none;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+@layer components {
+  .field-control {
+    @apply w-full rounded-lg border border-cove-border bg-cove-surface px-3 py-2 text-sm text-cove-ink shadow-sm transition placeholder:text-cove-muted/70 hover:border-cove-muted/40 aria-[invalid=true]:border-cove-danger;
+  }
+  .link {
+    @apply font-medium text-cove-accent underline decoration-cove-accent/30 underline-offset-2 hover:decoration-cove-accent;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;

@@ -1,95 +1,99 @@
 import { test, expect } from "@playwright/test";
-import { loginAs, prisma } from "./fixtures";
+import { STUDENT_DOMAIN, expectAccessible, loginAs, prisma } from "./fixtures";
 
 /**
- * Organizer journey: request an organization -> moderator approves ->
- * officer drafts an event -> submits for approval -> moderator approves &
- * publishes -> officer cancels it, which should notify RSVP holders.
- * Uses two browser contexts (officer, moderator) in one flow since the
- * approval loop genuinely spans two roles.
+ * Brief journeys 5–6: request an organization → moderator approves; draft
+ * an event → preview → submit → moderator approves → publish → edit
+ * capacity → cancel with notifications reaching an attendee.
  */
-test("request org, get approved, publish an event, and cancel it", async ({ browser }) => {
+test("organization request through event cancellation", async ({ browser }) => {
   const stamp = Date.now();
-  const officerEmail = `e2e-officer-${stamp}@students.midlandstate.demo`;
-  const moderatorEmail = `e2e-moderator-${stamp}@staff.midlandstate.demo`;
-  const orgName = `E2E Test Club ${stamp}`;
+  const orgName = `E2E Chess Club ${stamp}`;
+  const eventTitle = `E2E Blitz Night ${stamp}`;
 
-  const officerContext = await browser.newContext();
-  const moderatorContext = await browser.newContext();
-  const officerPage = await officerContext.newPage();
-  const moderatorPage = await moderatorContext.newPage();
+  const officerCtx = await browser.newContext();
+  const officerPage = await officerCtx.newPage();
+  await loginAs(officerCtx, { email: `e2e-officer-${stamp}@${STUDENT_DOMAIN}` });
 
-  await loginAs(officerContext, { email: officerEmail, role: "STUDENT" });
-  await loginAs(moderatorContext, { email: moderatorEmail, role: "CAMPUS_MODERATOR" });
-
-  // 1. Officer requests an organization.
   await officerPage.goto("/organizations/new");
-  await officerPage.getByLabel(/organization name/i).fill(orgName);
-  await officerPage.getByLabel(/^description$/i).fill("An E2E test organization.");
-  await officerPage.getByLabel(/contact channel/i).fill(`e2e-${stamp}@students.midlandstate.demo`);
-  await officerPage.getByLabel(/verification evidence/i).fill("This is a test organization created by an automated e2e test.");
-  await officerPage.getByRole("button", { name: /submit request/i }).click();
-  await expect(officerPage.getByRole("heading", { name: orgName })).toBeVisible();
+  await expectAccessible(officerPage);
+  // Submitting empty shows field errors instead of failing silently.
+  await officerPage.getByRole("button", { name: /submit for review/i }).click();
+  await expect(officerPage.getByText(/organization name is required/i)).toBeVisible();
+
+  await officerPage.getByLabel("Organization name").fill(orgName);
+  await officerPage.getByLabel("Description").fill("Weekly casual and rated chess for all levels.");
+  await officerPage.getByLabel(/contact channel/i).fill("chess@students.midlandstate.demo");
+  await officerPage.getByLabel(/verification evidence/i).fill("We have met informally for two years; 25 regulars.");
+  await officerPage.getByRole("button", { name: /submit for review/i }).click();
   await expect(officerPage.getByText(/request submitted/i)).toBeVisible();
 
-  // 2. Moderator approves it.
-  await moderatorPage.goto("/moderation");
-  await moderatorPage.getByRole("link", { name: orgName }).click();
-  await moderatorPage.getByLabel(/^action$/i).selectOption("approve");
-  await moderatorPage.getByLabel(/reason code/i).selectOption({ index: 0 });
-  await moderatorPage.getByRole("button", { name: /submit decision/i }).click();
-  await expect(moderatorPage).toHaveURL(/\/moderation$/);
+  const modCtx = await browser.newContext();
+  const modPage = await modCtx.newPage();
+  await loginAs(modCtx, { email: "moderator@staff.midlandstate.demo", role: "CAMPUS_MODERATOR" });
+  await modPage.goto("/moderation");
+  await expectAccessible(modPage);
+  await modPage.getByRole("link", { name: orgName }).click();
+  await modPage.getByLabel("Action").selectOption("approve");
+  await modPage.getByRole("button", { name: /submit decision/i }).click();
+  await expect(modPage.getByText(/decision recorded/i)).toBeVisible();
 
   const org = await prisma.organization.findFirstOrThrow({ where: { name: orgName } });
-  expect(org.verificationState).toBe("APPROVED");
-
-  // 3. Officer drafts, then submits, an event.
-  const orgSlug = org.slug;
-  await officerPage.goto(`/organizer/${orgSlug}/events/new`);
-  await officerPage.getByLabel(/^title$/i).fill(`E2E Test Event ${stamp}`);
-  await officerPage.getByLabel(/short summary/i).fill("A summary.");
-  await officerPage.getByLabel(/full description/i).fill("A full description of the e2e test event.");
-
-  const startLocal = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  const endLocal = new Date(startLocal.getTime() + 60 * 60 * 1000);
-  const toLocalInput = (d: Date) => d.toISOString().slice(0, 16);
-  await officerPage.locator("#startLocal").fill(toLocalInput(startLocal));
-  await officerPage.locator("#endLocal").fill(toLocalInput(endLocal));
-  await officerPage.getByLabel(/contact name/i).fill("E2E Organizer");
-  await officerPage.getByLabel(/contact channel/i).fill(`e2e-${stamp}@students.midlandstate.demo`);
+  await officerPage.goto(`/organizer/${org.slug}/events/new`);
+  await expectAccessible(officerPage);
+  const start = new Date(Date.now() + 3 * 24 * 3600_000);
+  const day = start.toISOString().slice(0, 10);
+  await officerPage.getByLabel("Title", { exact: true }).fill(eventTitle);
+  await officerPage.getByLabel("Summary", { exact: true }).fill("Five-minute games, pizza after.");
+  await officerPage.getByLabel("Full description").fill("Bring a clock if you have one.");
+  await officerPage.getByLabel("Starts", { exact: true }).fill(`${day}T18:00`);
+  await officerPage.getByLabel("Ends", { exact: true }).fill(`${day}T17:00`);
+  await officerPage.getByLabel("Capacity", { exact: true }).fill("1");
   await officerPage.getByRole("button", { name: /save draft/i }).click();
+  await expect(officerPage.getByText(/must end after it starts/i)).toBeVisible();
+  await officerPage.getByLabel("Ends", { exact: true }).fill(`${day}T20:00`);
+  await officerPage.getByRole("button", { name: /save draft/i }).click();
+  await expect(officerPage.getByText(/draft saved/i)).toBeVisible();
+  await expectAccessible(officerPage);
 
-  await expect(officerPage.getByRole("heading", { name: `E2E Test Event ${stamp}` })).toBeVisible();
+  // Students can't see the draft even with the link.
+  const series = await prisma.eventSeries.findFirstOrThrow({ where: { title: eventTitle }, include: { occurrences: true } });
+  const eventUrl = `/events/${series.occurrences[0]!.publicId}`;
+  const studentCtx = await browser.newContext();
+  const studentPage = await studentCtx.newPage();
+  await loginAs(studentCtx, { email: `e2e-attendee-${stamp}@${STUDENT_DOMAIN}` });
+  await studentPage.goto(eventUrl);
+  await expect(studentPage.getByRole("heading", { name: /couldn't find that page/i })).toBeVisible();
+
   await officerPage.getByRole("button", { name: /submit for approval/i }).click();
-  await expect(officerPage.getByText(/pending approval/i)).toBeVisible();
+  await expect(officerPage.getByText(/submitted! a campus moderator/i)).toBeVisible();
 
-  // 4. Moderator approves & publishes the event.
-  await moderatorPage.goto("/moderation/events");
-  await moderatorPage.getByRole("link", { name: `E2E Test Event ${stamp}` }).click();
-  await moderatorPage.getByLabel(/^action$/i).selectOption("approve");
-  await moderatorPage.getByLabel(/reason code/i).selectOption({ index: 0 });
-  await moderatorPage.getByRole("button", { name: /submit decision/i }).click();
-  // reviewAction redirects to /moderation/events on success — waiting for
-  // that navigation is what actually guarantees the server action (and its
-  // DB write) completed before we read the DB directly below. Without this,
-  // Playwright's click() returns as soon as the click fires (Next.js
-  // intercepts the form submit via JS, so there's no browser-level
-  // navigation for Playwright to auto-wait on), racing the assertion.
-  await expect(moderatorPage).toHaveURL(/\/moderation\/events$/);
+  await modPage.goto(`/moderation/events/${series.id}`);
+  await modPage.getByRole("button", { name: /submit decision/i }).click();
+  await expect(modPage).toHaveURL(/\/moderation\?done=event_approve/);
 
-  const series = await prisma.eventSeries.findFirstOrThrow({ where: { title: `E2E Test Event ${stamp}` } });
-  expect(series.approvalStatus).toBe("PUBLISHED");
+  await studentPage.goto(eventUrl);
+  await studentPage.getByRole("button", { name: /rsvp — i'm going/i }).click();
+  await expect(studentPage.getByText(/you're going/i).first()).toBeVisible();
 
-  // 5. Officer cancels the event; RSVP-holder notification path is
-  // covered by src/server/events.ts unit coverage — here we just assert
-  // the state transition and that the UI reflects it.
-  await officerPage.goto(`/organizer/${orgSlug}/events/${series.id}`);
-  await officerPage.getByPlaceholder(/cancellation reason/i).fill("E2E test cleanup.");
-  await officerPage.getByRole("button", { name: /^cancel event$/i }).click();
-  await expect(officerPage.getByText(/canceled/i).first()).toBeVisible();
+  // Organizer raises capacity, then cancels the whole event.
+  await officerPage.goto(`/organizer/${org.slug}/events/${series.id}`);
+  await officerPage.getByText(/edit or cancel this date/i).click();
+  await officerPage.getByLabel(/capacity \(blank = unlimited\)/i).fill("30");
+  await officerPage.getByRole("button", { name: /save changes/i }).click();
+  await expect(officerPage.getByText(/everyone going or waitlisted was notified/i)).toBeVisible();
 
-  const canceledSeries = await prisma.eventSeries.findUniqueOrThrow({ where: { id: series.id } });
-  expect(canceledSeries.approvalStatus).toBe("CANCELED");
+  officerPage.once("dialog", (d) => d.accept());
+  await officerPage.getByLabel(/reason \(sent to attendees\)/i).last().fill("Room double-booked");
+  await officerPage.getByRole("button", { name: /cancel entire event/i }).click();
+  await expect(officerPage.getByText(/the event was canceled/i)).toBeVisible();
+
+  await studentPage.goto("/notifications");
+  await expect(studentPage.getByText(/was canceled\. room double-booked/i)).toBeVisible();
+  await studentPage.goto(eventUrl);
+  await expect(studentPage.getByRole("alert").filter({ hasText: /canceled/i })).toBeVisible();
+
+  await Promise.all([officerCtx.close(), modCtx.close(), studentCtx.close()]);
 });
 
 test.afterAll(async () => {

@@ -1,11 +1,11 @@
 {
   "name": "cohortcove",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "CohortCove — institution-scoped campus event network (working name; formerly Campus Connect).",
+  "description": "CohortCove — verified, institution-scoped campus events platform (multi-tenant SaaS).",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -13,47 +13,45 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
-    "bootstrap-admin": "tsx scripts/bootstrap-admin.ts"
+    "bootstrap-admin": "tsx scripts/bootstrap-admin.ts",
+    "vercel-build": "prisma generate && prisma migrate deploy && next build",
+    "db:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=20.18.0"
   },
   "dependencies": {
-    "@prisma/client": "5.20.0",
-    "bcryptjs": "2.4.3",
-    "bullmq": "5.13.2",
-    "clsx": "2.1.1",
-    "date-fns": "3.6.0",
-    "date-fns-tz": "3.1.3",
-    "ioredis": "5.4.1",
+    "@prisma/client": "^6.19.3",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "date-fns-tz": "^3.2.0",
     "jose": "5.9.3",
-    "nanoid": "5.0.7",
-    "next": "14.2.35",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "zod": "3.23.8"
+    "next": "^15.5.28",
+    "react": "^19.2.9",
+    "react-dom": "^19.2.9",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.13.0",
-    "@playwright/test": "1.47.2",
-    "@types/bcryptjs": "2.4.6",
-    "@types/node": "20.16.5",
-    "@types/react": "18.3.5",
-    "@types/react-dom": "18.3.0",
-    "autoprefixer": "10.4.20",
-    "eslint": "8.57.0",
-    "eslint-config-next": "14.2.35",
-    "postcss": "8.4.45",
-    "prisma": "5.20.0",
-    "tailwindcss": "3.4.10",
-    "tsx": "4.19.1",
-    "typescript": "5.6.2",
-    "vitest": "2.1.1"
+    "@axe-core/playwright": "^4.14.0",
+    "@eslint/eslintrc": "^3.3.7",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.28",
+    "postcss": "^8.5.31",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }

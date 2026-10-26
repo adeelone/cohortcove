@@ -10,6 +10,7 @@ export type RsvpResult =
   | { kind: "already_waitlisted" }
   | { kind: "occurrence_canceled" }
   | { kind: "registration_closed" }
+  | { kind: "not_available" }
   | { kind: "rate_limited" };
 
 /**
@@ -34,20 +35,35 @@ export async function createRsvp(userId: string, occurrenceId: string): Promise<
 
   const result = await prisma.$transaction(async (tx): Promise<RsvpResult> => {
     const occurrenceRows = await tx.$queryRaw<
-      { id: string; capacity: number | null; isCanceled: boolean; registrationDeadline: Date | null }[]
-    >`SELECT id, capacity, "isCanceled", "registrationDeadline"
-       FROM "EventOccurrence"
-       WHERE id = ${occurrenceId}
-       FOR UPDATE`;
+      {
+        id: string;
+        capacity: number | null;
+        isCanceled: boolean;
+        registrationDeadline: Date | null;
+        endAtUtc: Date;
+        approvalStatus: string;
+        verificationState: string;
+      }[]
+    >`SELECT o.id, o.capacity, o."isCanceled", o."registrationDeadline", o."endAtUtc",
+             s."approvalStatus", org."verificationState"
+       FROM "EventOccurrence" o
+       JOIN "EventSeries" s ON s.id = o."eventSeriesId"
+       JOIN "Organization" org ON org.id = s."organizationId"
+       WHERE o.id = ${occurrenceId}
+       FOR UPDATE OF o`;
 
     const occurrence = occurrenceRows[0];
     if (!occurrence) {
       throw new Error("Occurrence not found");
     }
-    if (occurrence.isCanceled) {
+    if (occurrence.isCanceled || occurrence.approvalStatus === "CANCELED") {
       return { kind: "occurrence_canceled" };
     }
-    if (occurrence.registrationDeadline && occurrence.registrationDeadline < new Date()) {
+    if (occurrence.approvalStatus !== "PUBLISHED" || occurrence.verificationState !== "APPROVED") {
+      return { kind: "not_available" };
+    }
+    const now = new Date();
+    if (occurrence.endAtUtc < now || (occurrence.registrationDeadline && occurrence.registrationDeadline < now)) {
       return { kind: "registration_closed" };
     }
 
@@ -112,10 +128,19 @@ export async function createRsvp(userId: string, occurrenceId: string): Promise<
   }
 
   if (result.kind === "confirmed") {
+    const occurrence = await prisma.eventOccurrence.findUnique({
+      where: { id: occurrenceId },
+      select: { publicId: true, eventSeries: { select: { title: true } } },
+    });
     await createNotification({
       userId,
       type: "RSVP_CONFIRMATION",
-      payload: { occurrenceId },
+      payload: {
+        occurrenceId,
+        title: occurrence?.eventSeries.title,
+        summary: `You're going to "${occurrence?.eventSeries.title ?? "the event"}".`,
+        href: occurrence ? `/events/${occurrence.publicId}` : undefined,
+      },
       dedupeKey: `rsvp-confirmation:${result.rsvpId}`,
     });
   }
@@ -161,17 +186,20 @@ export async function cancelRsvp(userId: string, occurrenceId: string): Promise<
  * decision the brief leaves open. Current implementation: automatic
  * promotion, notified via the RSVP_CONFIRMATION notification, with the
  * promotionExpiresAt column reserved for a confirm-before-expiry policy if
- * that's preferred later.
+ * that's preferred later. When capacity is unlimited (null) everyone
+ * waiting is eligible — e.g. after an organizer removes the cap.
  */
 export async function promoteNextWaitlistEntry(occurrenceId: string): Promise<string | null> {
   const promotedEntry = await prisma.$transaction(async (tx) => {
     const occurrenceRows = await tx.$queryRaw<{ id: string; capacity: number | null }[]>`
       SELECT id, capacity FROM "EventOccurrence" WHERE id = ${occurrenceId} FOR UPDATE`;
     const occurrence = occurrenceRows[0];
-    if (!occurrence || occurrence.capacity === null) return null;
+    if (!occurrence) return null;
 
-    const goingCount = await tx.rSVP.count({ where: { occurrenceId, status: "GOING" } });
-    if (goingCount >= occurrence.capacity) return null;
+    if (occurrence.capacity !== null) {
+      const goingCount = await tx.rSVP.count({ where: { occurrenceId, status: "GOING" } });
+      if (goingCount >= occurrence.capacity) return null;
+    }
 
     const next = await tx.waitlistEntry.findFirst({
       where: { occurrenceId, status: "WAITING" },
@@ -197,10 +225,19 @@ export async function promoteNextWaitlistEntry(occurrenceId: string): Promise<st
   // Deterministic on the waitlist entry id (not random) so retrying this
   // job never double-notifies the same promoted entry — createNotification
   // upserts on dedupeKey.
+  const occurrence = await prisma.eventOccurrence.findUnique({
+    where: { id: occurrenceId },
+    select: { publicId: true, eventSeries: { select: { title: true } } },
+  });
   await createNotification({
     userId: promotedEntry.userId,
     type: "WAITLIST_PROMOTION",
-    payload: { occurrenceId },
+    payload: {
+      occurrenceId,
+      title: occurrence?.eventSeries.title,
+      summary: `A seat opened up — you're now going to "${occurrence?.eventSeries.title ?? "your event"}".`,
+      href: occurrence ? `/events/${occurrence.publicId}` : undefined,
+    },
     dedupeKey: `waitlist-promotion:${promotedEntry.id}`,
     force: true,
   });

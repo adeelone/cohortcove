@@ -34,6 +34,7 @@ describeWithDatabase("approval state transitions", () => {
 
     const reviewed = await reviewOrganization({
       moderatorUserId: moderator.id,
+      institutionId: institution.id,
       organizationId: requested.organizationId,
       decision: "approve",
       reasonCode: "OTHER",
@@ -46,6 +47,28 @@ describeWithDatabase("approval state transitions", () => {
 
     const history = await prisma.organizationVerification.findMany({ where: { organizationId: requested.organizationId } });
     expect(history.map((h) => h.state)).toEqual(["REQUESTED", "APPROVED"]);
+
+    // Approving an already-approved org is an invalid transition, not a silent re-write.
+    const again = await reviewOrganization({
+      moderatorUserId: moderator.id,
+      institutionId: institution.id,
+      organizationId: requested.organizationId,
+      decision: "approve",
+      reasonCode: "OTHER",
+      note: "",
+    });
+    expect(again.kind).toBe("invalid_transition");
+
+    // A moderator from another institution can't touch it.
+    const foreign = await reviewOrganization({
+      moderatorUserId: moderator.id,
+      institutionId: "some-other-institution",
+      organizationId: requested.organizationId,
+      decision: "suspend",
+      reasonCode: "OTHER",
+      note: "x",
+    });
+    expect(foreign.kind).toBe("not_found");
   });
 
   it("organizer cannot self-assert official-department status — reviewOrganization only sets it when explicitly passed by the caller", async () => {
@@ -61,6 +84,7 @@ describeWithDatabase("approval state transitions", () => {
 
     await reviewOrganization({
       moderatorUserId: moderator.id,
+      institutionId: institution.id,
       organizationId: requested.organizationId,
       decision: "approve",
       reasonCode: "OTHER",
@@ -104,7 +128,8 @@ describeWithDatabase("approval state transitions", () => {
     const resubmitted = await submitForApproval(seriesId, requester.id);
     expect(resubmitted.kind).toBe("invalid_state");
 
-    await reviewEventSeries({ moderatorUserId: moderator.id, seriesId, decision: "request_changes", reasonCode: "OTHER", note: "fix the description" });
+    const changes = await reviewEventSeries({ moderatorUserId: moderator.id, institutionId: institution.id, seriesId, decision: "request_changes", reasonCode: "OTHER", note: "fix the description" });
+    expect(changes.kind).toBe("reviewed");
     series = await prisma.eventSeries.findUniqueOrThrow({ where: { id: seriesId } });
     expect(series.approvalStatus).toBe("CHANGES_REQUESTED");
 
@@ -112,9 +137,13 @@ describeWithDatabase("approval state transitions", () => {
     const resubmitAfterChanges = await submitForApproval(seriesId, requester.id);
     expect(resubmitAfterChanges.kind).toBe("submitted");
 
-    await reviewEventSeries({ moderatorUserId: moderator.id, seriesId, decision: "approve", reasonCode: "OTHER", note: "good now" });
+    await reviewEventSeries({ moderatorUserId: moderator.id, institutionId: institution.id, seriesId, decision: "approve", reasonCode: "OTHER", note: "good now" });
     series = await prisma.eventSeries.findUniqueOrThrow({ where: { id: seriesId } });
     expect(series.approvalStatus).toBe("PUBLISHED");
+
+    // A published event can't be "approved" again through the review path.
+    const reapprove = await reviewEventSeries({ moderatorUserId: moderator.id, institutionId: institution.id, seriesId, decision: "approve", reasonCode: "OTHER", note: "" });
+    expect(reapprove.kind).toBe("invalid_state");
   });
 
   afterAll(async () => {

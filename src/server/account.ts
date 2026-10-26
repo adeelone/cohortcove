@@ -50,7 +50,6 @@ export async function exportUserData(userId: string): Promise<Record<string, unk
  */
 export async function deleteUserAccount(userId: string): Promise<void> {
   const goingRsvps = await prisma.rSVP.findMany({ where: { userId, status: "GOING" } });
-  const waitingEntries = await prisma.waitlistEntry.findMany({ where: { userId, status: "WAITING" } });
   const occurrenceIdsToRebalance = new Set(goingRsvps.map((r) => r.occurrenceId));
 
   await prisma.$transaction(async (tx) => {
@@ -62,10 +61,11 @@ export async function deleteUserAccount(userId: string): Promise<void> {
     const anonymizedEmail = `deleted-${crypto.randomBytes(8).toString("hex")}@deleted.cohortcove.demo`;
     await tx.user.update({
       where: { id: userId },
-      data: { email: anonymizedEmail, passwordHash: null, deletedAt: new Date() },
+      data: { email: anonymizedEmail, passwordHash: null, deletedAt: new Date(), sessionVersion: { increment: 1 } },
     });
     await tx.profile.updateMany({ where: { userId }, data: { displayName: "Deleted user", interests: [] } });
-    await tx.institutionalMembership.updateMany({ where: { userId }, data: { status: "SUSPENDED" } });
+    await tx.institutionalMembership.updateMany({ where: { userId }, data: { status: "SUSPENDED", verificationTokenHash: null } });
+    await tx.notification.deleteMany({ where: { userId } });
 
     await recordAudit(tx, {
       actorUserId: userId,
@@ -79,5 +79,4 @@ export async function deleteUserAccount(userId: string): Promise<void> {
   for (const occurrenceId of occurrenceIdsToRebalance) {
     await promoteNextWaitlistEntry(occurrenceId);
   }
-  void waitingEntries;
 }

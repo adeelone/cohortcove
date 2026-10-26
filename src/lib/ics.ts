@@ -12,23 +12,38 @@ function escapeText(value: string): string {
     .replace(/\\/g, "\\\\")
     .replace(/;/g, "\\;")
     .replace(/,/g, "\\,")
-    .replace(/\n/g, "\\n");
+    .replace(/\r?\n/g, "\\n");
 }
 
 function formatUtc(date: Date): string {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
-/** Fold lines longer than 75 octets per RFC 5545 §3.1 so strict parsers don't choke. */
+/**
+ * Fold lines longer than 75 octets per RFC 5545 §3.1 so strict parsers
+ * don't choke. Counts UTF-8 bytes (not UTF-16 units) and never splits a
+ * multi-byte character.
+ */
 function foldLine(line: string): string {
-  if (line.length <= 75) return line;
-  let result = line.slice(0, 75);
-  let rest = line.slice(75);
-  while (rest.length > 0) {
-    result += "\r\n " + rest.slice(0, 74);
-    rest = rest.slice(74);
+  const encoder = new TextEncoder();
+  if (encoder.encode(line).length <= 75) return line;
+  const parts: string[] = [];
+  let current = "";
+  let bytes = 0;
+  let limit = 75;
+  for (const ch of line) {
+    const size = encoder.encode(ch).length;
+    if (bytes + size > limit) {
+      parts.push(current);
+      current = "";
+      bytes = 0;
+      limit = 74; // continuation lines start with a space
+    }
+    current += ch;
+    bytes += size;
   }
-  return result;
+  parts.push(current);
+  return parts.join("\r\n ");
 }
 
 export interface IcsEvent {
